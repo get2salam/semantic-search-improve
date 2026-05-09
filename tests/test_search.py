@@ -139,6 +139,34 @@ class TestSemanticSearchEngine:
         assert "SemanticSearchEngine" in repr_str
         assert "documents=5" in repr_str
 
+    def test_search_rejects_empty_query(self, engine_with_docs):
+        """Empty or whitespace-only queries raise ValueError."""
+        with pytest.raises(ValueError, match="non-empty string"):
+            engine_with_docs.search("")
+        with pytest.raises(ValueError, match="non-empty string"):
+            engine_with_docs.search("   ")
+
+    def test_search_rejects_invalid_top_k(self, engine_with_docs):
+        """Non-positive or non-int top_k raises ValueError."""
+        with pytest.raises(ValueError, match="positive integer"):
+            engine_with_docs.search("test", top_k=0)
+        with pytest.raises(ValueError, match="positive integer"):
+            engine_with_docs.search("test", top_k=-3)
+        with pytest.raises(ValueError, match="positive integer"):
+            engine_with_docs.search("test", top_k=True)
+
+    def test_add_documents_rejects_non_string(self, engine):
+        """Non-string entries raise TypeError before any encoding work happens."""
+        with pytest.raises(TypeError, match="must be strings"):
+            engine.add_documents(["valid", 42, "also valid"])
+        assert len(engine) == 0
+
+    def test_add_documents_rejects_empty_string(self, engine):
+        """Empty or whitespace-only entries raise ValueError."""
+        with pytest.raises(ValueError, match="empty or whitespace"):
+            engine.add_documents(["valid", "   "])
+        assert len(engine) == 0
+
     def test_embeddings_normalized(self, engine):
         """Test that embeddings are L2-normalized."""
         engine.add_documents(["Test document"])

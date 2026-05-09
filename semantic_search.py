@@ -90,9 +90,21 @@ class SemanticSearchEngine:
             documents: List of text documents to index
             batch_size: Batch size for encoding (affects memory usage)
             show_progress: Whether to show a progress bar
+
+        Raises:
+            TypeError: If any entry in ``documents`` is not a string.
+            ValueError: If any entry is empty or whitespace-only.
         """
         if not documents:
             return
+
+        for i, doc in enumerate(documents):
+            if not isinstance(doc, str):
+                raise TypeError(
+                    f"All documents must be strings, got {type(doc).__name__} at index {i}"
+                )
+            if not doc.strip():
+                raise ValueError(f"Document at index {i} is empty or whitespace-only")
 
         # Compute embeddings
         print(f"Encoding {len(documents)} documents...")
@@ -141,7 +153,15 @@ class SemanticSearchEngine:
 
         Returns:
             List of (document, similarity_score) tuples, sorted by relevance
+
+        Raises:
+            ValueError: If ``query`` is empty/whitespace or ``top_k`` is not a positive int.
         """
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1:
+            raise ValueError(f"top_k must be a positive integer, got {top_k!r}")
+
         if not self.documents:
             return []
 
