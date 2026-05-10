@@ -155,6 +155,23 @@ class TestSemanticSearchEngine:
         with pytest.raises(ValueError, match="positive integer"):
             engine_with_docs.search("test", top_k=True)
 
+    def test_search_rejects_invalid_threshold(self, engine_with_docs):
+        """Out-of-range or non-numeric threshold raises ValueError."""
+        with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+            engine_with_docs.search("test", threshold=-0.1)
+        with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+            engine_with_docs.search("test", threshold=1.5)
+        with pytest.raises(ValueError, match="number or None"):
+            engine_with_docs.search("test", threshold="0.5")
+        with pytest.raises(ValueError, match="number or None"):
+            engine_with_docs.search("test", threshold=True)
+
+    def test_search_accepts_boundary_threshold(self, engine_with_docs):
+        """Threshold values 0.0 and 1.0 are accepted."""
+        # Should not raise; 0.0 keeps everything, 1.0 likely filters all out.
+        engine_with_docs.search("test", threshold=0.0)
+        engine_with_docs.search("test", threshold=1.0)
+
     def test_add_documents_rejects_non_string(self, engine):
         """Non-string entries raise TypeError before any encoding work happens."""
         with pytest.raises(TypeError, match="must be strings"):

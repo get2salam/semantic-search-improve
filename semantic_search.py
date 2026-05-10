@@ -155,12 +155,20 @@ class SemanticSearchEngine:
             List of (document, similarity_score) tuples, sorted by relevance
 
         Raises:
-            ValueError: If ``query`` is empty/whitespace or ``top_k`` is not a positive int.
+            ValueError: If ``query`` is empty/whitespace, ``top_k`` is not a
+                positive int, or ``threshold`` is not ``None`` or in ``[0.0, 1.0]``.
         """
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
         if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1:
             raise ValueError(f"top_k must be a positive integer, got {top_k!r}")
+        if threshold is not None:
+            if isinstance(threshold, bool) or not isinstance(threshold, int | float):
+                raise ValueError(
+                    f"threshold must be a number or None, got {type(threshold).__name__}"
+                )
+            if not 0.0 <= float(threshold) <= 1.0:
+                raise ValueError(f"threshold must be between 0.0 and 1.0, got {threshold!r}")
 
         if not self.documents:
             return []
