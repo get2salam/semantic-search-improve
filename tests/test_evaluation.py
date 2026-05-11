@@ -8,6 +8,7 @@ import pytest
 
 from evaluation import (
     EvalQuery,
+    RetrievalEvaluator,
     average_precision,
     dcg_at_k,
     f1_at_k,
@@ -144,3 +145,32 @@ class TestDCGandNDCG:
         assert ndcg_at_k(["b", "a", "c"], q, k=3) == pytest.approx(dcg / idcg)
         # And it must be strictly less than 1 since ranking is non-ideal.
         assert ndcg_at_k(["b", "a", "c"], q, k=3) < 1.0
+
+
+class TestEvaluatorReportsHitRateAndF1:
+    def test_aggregated_hit_rate_and_f1_are_reported(self):
+        # Two queries: q1 finds its sole relevant doc at rank 1 (hit, perfect P/R),
+        # q2 misses entirely (no hit, zero F1). Mean Hit@k should be 0.5.
+        evaluator = RetrievalEvaluator()
+        evaluator.add_queries(
+            [
+                EvalQuery(query="q1", relevant_docs=["a"]),
+                EvalQuery(query="q2", relevant_docs=["z"]),
+            ]
+        )
+
+        results = {"q1": ["a", "x", "y"], "q2": ["x", "y", "w"]}
+
+        def search_fn(query: str, k: int) -> list[str]:
+            return results[query][:k]
+
+        report = evaluator.evaluate(search_fn, k_values=[1, 3])
+
+        assert report.hit_rate[3] == pytest.approx(0.5)
+        assert report.hit_rate[1] == pytest.approx(0.5)
+        # q1: P=R=F1=1.0 at k=1; q2: all zero -> mean F1@1 = 0.5
+        assert report.f1[1] == pytest.approx(0.5)
+        # Round-trip via to_dict should expose the new fields
+        d = report.to_dict()
+        assert "hit_rate" in d and "f1" in d
+        assert d["hit_rate"][3] == pytest.approx(0.5)

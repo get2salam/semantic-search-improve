@@ -24,7 +24,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +64,8 @@ class EvalResult:
     ndcg: dict[int, float]  # k -> NDCG@k
     precision: dict[int, float]  # k -> P@k
     recall: dict[int, float]  # k -> R@k
+    hit_rate: dict[int, float] = field(default_factory=dict)  # k -> HitRate@k
+    f1: dict[int, float] = field(default_factory=dict)  # k -> F1@k
 
 
 @dataclass
@@ -79,6 +81,8 @@ class EvalReport:
     recall: dict[int, float]  # Mean Recall@k
     per_query: list[EvalResult]
     elapsed_seconds: float
+    hit_rate: dict[int, float] = field(default_factory=dict)  # Mean HitRate@k
+    f1: dict[int, float] = field(default_factory=dict)  # Mean F1@k
     model_name: str | None = None
 
     def to_dict(self) -> dict:
@@ -90,6 +94,8 @@ class EvalReport:
             "ndcg": self.ndcg,
             "precision": self.precision,
             "recall": self.recall,
+            "hit_rate": self.hit_rate,
+            "f1": self.f1,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
         }
@@ -111,13 +117,17 @@ class EvalReport:
         print(f"  MRR:  {self.mrr:.4f}")
         print(f"  MAP:  {self.map_score:.4f}")
         print()
-        print(f"  {'k':>4}  {'NDCG@k':>8}  {'P@k':>8}  {'R@k':>8}")
-        print(f"  {'—' * 4}  {'—' * 8}  {'—' * 8}  {'—' * 8}")
+        print(f"  {'k':>4}  {'NDCG@k':>8}  {'P@k':>8}  {'R@k':>8}  {'F1@k':>8}  {'Hit@k':>8}")
+        print(f"  {'—' * 4}  {'—' * 8}  {'—' * 8}  {'—' * 8}  {'—' * 8}  {'—' * 8}")
         for k in self.k_values:
             ndcg = self.ndcg.get(k, 0)
             prec = self.precision.get(k, 0)
             rec = self.recall.get(k, 0)
-            print(f"  {k:>4}  {ndcg:>8.4f}  {prec:>8.4f}  {rec:>8.4f}")
+            f1 = self.f1.get(k, 0)
+            hit = self.hit_rate.get(k, 0)
+            print(
+                f"  {k:>4}  {ndcg:>8.4f}  {prec:>8.4f}  {rec:>8.4f}  {f1:>8.4f}  {hit:>8.4f}"
+            )
         print(f"{'=' * 60}\n")
 
 
@@ -343,6 +353,8 @@ class RetrievalEvaluator:
         ndcg_scores: dict[int, list[float]] = {k: [] for k in k_values}
         prec_scores: dict[int, list[float]] = {k: [] for k in k_values}
         rec_scores: dict[int, list[float]] = {k: [] for k in k_values}
+        hit_scores: dict[int, list[float]] = {k: [] for k in k_values}
+        f1_scores: dict[int, list[float]] = {k: [] for k in k_values}
 
         for eq in self._queries:
             # Retrieve
@@ -358,13 +370,19 @@ class RetrievalEvaluator:
             q_ndcg = {}
             q_prec = {}
             q_rec = {}
+            q_hit = {}
+            q_f1 = {}
             for k in k_values:
                 q_ndcg[k] = ndcg_at_k(retrieved, eq, k)
                 q_prec[k] = precision_at_k(retrieved, relevant, k)
                 q_rec[k] = recall_at_k(retrieved, relevant, k)
+                q_hit[k] = hit_rate_at_k(retrieved, relevant, k)
+                q_f1[k] = f1_at_k(retrieved, relevant, k)
                 ndcg_scores[k].append(q_ndcg[k])
                 prec_scores[k].append(q_prec[k])
                 rec_scores[k].append(q_rec[k])
+                hit_scores[k].append(q_hit[k])
+                f1_scores[k].append(q_f1[k])
 
             per_query_results.append(
                 EvalResult(
@@ -376,6 +394,8 @@ class RetrievalEvaluator:
                     ndcg=q_ndcg,
                     precision=q_prec,
                     recall=q_rec,
+                    hit_rate=q_hit,
+                    f1=q_f1,
                 )
             )
 
@@ -389,6 +409,8 @@ class RetrievalEvaluator:
             ndcg={k: round(float(np.mean(v)), 4) for k, v in ndcg_scores.items()},
             precision={k: round(float(np.mean(v)), 4) for k, v in prec_scores.items()},
             recall={k: round(float(np.mean(v)), 4) for k, v in rec_scores.items()},
+            hit_rate={k: round(float(np.mean(v)), 4) for k, v in hit_scores.items()},
+            f1={k: round(float(np.mean(v)), 4) for k, v in f1_scores.items()},
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),
             model_name=model_name,
