@@ -10,6 +10,8 @@ from evaluation import (
     EvalQuery,
     average_precision,
     dcg_at_k,
+    f1_at_k,
+    hit_rate_at_k,
     ndcg_at_k,
     precision_at_k,
     recall_at_k,
@@ -71,6 +73,46 @@ class TestPrecisionRecallAtK:
 
     def test_recall_no_relevant(self):
         assert recall_at_k(["a"], set(), k=5) == 0.0
+
+
+class TestHitRateAtK:
+    def test_relevant_in_top_k(self):
+        assert hit_rate_at_k(["x", "a", "y"], {"a"}, k=3) == 1.0
+
+    def test_relevant_outside_top_k(self):
+        # "a" is at rank 4, outside top-3
+        assert hit_rate_at_k(["x", "y", "z", "a"], {"a"}, k=3) == 0.0
+
+    def test_no_relevant_in_truth(self):
+        assert hit_rate_at_k(["a", "b"], set(), k=5) == 0.0
+
+    def test_k_zero_or_negative(self):
+        assert hit_rate_at_k(["a"], {"a"}, k=0) == 0.0
+        assert hit_rate_at_k(["a"], {"a"}, k=-1) == 0.0
+
+    def test_empty_retrieved(self):
+        assert hit_rate_at_k([], {"a"}, k=5) == 0.0
+
+    def test_multiple_relevant_still_returns_one(self):
+        # Hit rate is binary regardless of how many relevant docs land in top-k
+        assert hit_rate_at_k(["a", "b", "c"], {"a", "b", "c"}, k=3) == 1.0
+
+
+class TestF1AtK:
+    def test_perfect_precision_and_recall(self):
+        # All relevant docs at top, k=2 -> P=1, R=1 -> F1=1
+        assert f1_at_k(["a", "b"], {"a", "b"}, k=2) == pytest.approx(1.0)
+
+    def test_no_hits_returns_zero(self):
+        assert f1_at_k(["x", "y"], {"a"}, k=2) == 0.0
+
+    def test_harmonic_mean_formula(self):
+        # retrieved=[a,x,b], relevant={a,b,c}, k=3
+        # P@3 = 2/3, R@3 = 2/3 -> F1 = 2/3
+        assert f1_at_k(["a", "x", "b"], {"a", "b", "c"}, k=3) == pytest.approx(2.0 / 3.0)
+
+    def test_no_relevant_in_truth(self):
+        assert f1_at_k(["a"], set(), k=3) == 0.0
 
 
 class TestDCGandNDCG:

@@ -177,6 +177,33 @@ def recall_at_k(retrieved: Sequence[str], relevant: set, k: int) -> float:
     return len(top_k & relevant) / len(relevant)
 
 
+def hit_rate_at_k(retrieved: Sequence[str], relevant: set, k: int) -> float:
+    """
+    Hit Rate@k (a.k.a. Success@k): 1.0 if any relevant document appears in
+    the top-k retrieved results, else 0.0.
+
+    Commonly reported for RAG pipelines where surfacing at least one
+    relevant chunk for the generator is sufficient.
+    """
+    if not relevant or k <= 0:
+        return 0.0
+    return 1.0 if any(d in relevant for d in retrieved[:k]) else 0.0
+
+
+def f1_at_k(retrieved: Sequence[str], relevant: set, k: int) -> float:
+    """
+    F1@k: harmonic mean of Precision@k and Recall@k.
+
+    Balances surface accuracy against coverage of the relevant set; returns
+    0.0 when both precision and recall are zero.
+    """
+    p = precision_at_k(retrieved, relevant, k)
+    r = recall_at_k(retrieved, relevant, k)
+    if p + r == 0.0:
+        return 0.0
+    return 2.0 * p * r / (p + r)
+
+
 def dcg_at_k(
     retrieved: Sequence[str],
     query: EvalQuery,
