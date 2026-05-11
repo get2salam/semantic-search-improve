@@ -68,6 +68,7 @@ class EvalResult:
     f1: dict[int, float] = field(default_factory=dict)  # k -> F1@k
     mrr_at_k: dict[int, float] = field(default_factory=dict)  # k -> RR@k
     err: dict[int, float] = field(default_factory=dict)  # k -> ERR@k (graded)
+    rbp: dict[int, float] = field(default_factory=dict)  # k -> RBP@k (user-model)
     r_precision: float = 0.0  # P@|R|: precision at the size of the relevant set
 
 
@@ -88,6 +89,8 @@ class EvalReport:
     f1: dict[int, float] = field(default_factory=dict)  # Mean F1@k
     mrr_at_k: dict[int, float] = field(default_factory=dict)  # Mean RR@k (MRR with cutoff)
     err: dict[int, float] = field(default_factory=dict)  # Mean ERR@k (graded)
+    rbp: dict[int, float] = field(default_factory=dict)  # Mean RBP@k (user-model)
+    rbp_persistence: float = 0.8  # p parameter used for the RBP computation
     r_precision: float = 0.0  # Mean R-precision (P@|R|) across queries
     model_name: str | None = None
 
@@ -104,6 +107,8 @@ class EvalReport:
             "f1": self.f1,
             "mrr_at_k": self.mrr_at_k,
             "err": self.err,
+            "rbp": self.rbp,
+            "rbp_persistence": self.rbp_persistence,
             "r_precision": self.r_precision,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
@@ -297,6 +302,47 @@ def err_at_k(
     return err
 
 
+def rbp_at_k(
+    retrieved: Sequence[str],
+    query: EvalQuery,
+    k: int,
+    persistence: float = 0.8,
+    max_grade: int | None = None,
+) -> float:
+    """
+    Rank-Biased Precision at k (Moffat & Zobel, 2008).
+
+    Models a user who examines rank ``i`` with probability ``p^(i-1)``,
+    where ``p`` (``persistence``) is how likely the user is to continue
+    past each result::
+
+        RBP@k = (1 - p) * sum_{i=1..k} g_i * p^(i-1)
+
+    ``g_i`` is the doc's grade normalised to ``[0, 1]`` by ``max_grade``
+    (1 for binary relevance). Unlike NDCG, RBP has no per-query
+    normalising denominator, so unjudged documents simply contribute
+    zero — which makes the metric notably robust to incomplete
+    relevance judgments. ``persistence`` must satisfy ``0 <= p < 1``.
+    """
+    if k <= 0 or not 0.0 <= persistence < 1.0:
+        return 0.0
+    if max_grade is None:
+        max_grade = (
+            max(query.relevance_grades.values(), default=1)
+            if query.relevance_grades
+            else 1
+        )
+    if max_grade <= 0:
+        return 0.0
+
+    total = 0.0
+    weight = 1.0  # p^(i-1); starts at p^0 = 1
+    for doc in retrieved[:k]:
+        total += (query.get_grade(doc) / max_grade) * weight
+        weight *= persistence
+    return (1.0 - persistence) * total
+
+
 def dcg_at_k(
     retrieved: Sequence[str],
     query: EvalQuery,
@@ -410,6 +456,7 @@ class RetrievalEvaluator:
         search_fn: SearchFn,
         k_values: list[int] | None = None,
         model_name: str | None = None,
+        rbp_persistence: float = 0.8,
     ) -> EvalReport:
         """
         Run evaluation on all queries.
@@ -441,6 +488,7 @@ class RetrievalEvaluator:
         f1_scores: dict[int, list[float]] = {k: [] for k in k_values}
         rr_at_k_scores: dict[int, list[float]] = {k: [] for k in k_values}
         err_scores: dict[int, list[float]] = {k: [] for k in k_values}
+        rbp_scores: dict[int, list[float]] = {k: [] for k in k_values}
 
         for eq in self._queries:
             # Retrieve at least |R| docs so R-precision is well-defined even
@@ -464,6 +512,7 @@ class RetrievalEvaluator:
             q_f1 = {}
             q_rr_at_k = {}
             q_err = {}
+            q_rbp = {}
             for k in k_values:
                 q_ndcg[k] = ndcg_at_k(retrieved, eq, k)
                 q_prec[k] = precision_at_k(retrieved, relevant, k)
@@ -472,6 +521,7 @@ class RetrievalEvaluator:
                 q_f1[k] = f1_at_k(retrieved, relevant, k)
                 q_rr_at_k[k] = reciprocal_rank_at_k(retrieved, relevant, k)
                 q_err[k] = err_at_k(retrieved, eq, k)
+                q_rbp[k] = rbp_at_k(retrieved, eq, k, persistence=rbp_persistence)
                 ndcg_scores[k].append(q_ndcg[k])
                 prec_scores[k].append(q_prec[k])
                 rec_scores[k].append(q_rec[k])
@@ -479,6 +529,7 @@ class RetrievalEvaluator:
                 f1_scores[k].append(q_f1[k])
                 rr_at_k_scores[k].append(q_rr_at_k[k])
                 err_scores[k].append(q_err[k])
+                rbp_scores[k].append(q_rbp[k])
 
             per_query_results.append(
                 EvalResult(
@@ -494,6 +545,7 @@ class RetrievalEvaluator:
                     f1=q_f1,
                     mrr_at_k=q_rr_at_k,
                     err=q_err,
+                    rbp=q_rbp,
                     r_precision=rp,
                 )
             )
@@ -512,6 +564,8 @@ class RetrievalEvaluator:
             f1={k: round(float(np.mean(v)), 4) for k, v in f1_scores.items()},
             mrr_at_k={k: round(float(np.mean(v)), 4) for k, v in rr_at_k_scores.items()},
             err={k: round(float(np.mean(v)), 4) for k, v in err_scores.items()},
+            rbp={k: round(float(np.mean(v)), 4) for k, v in rbp_scores.items()},
+            rbp_persistence=rbp_persistence,
             r_precision=round(float(np.mean(r_prec_scores)), 4),
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),

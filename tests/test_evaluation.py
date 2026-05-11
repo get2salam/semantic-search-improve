@@ -17,6 +17,7 @@ from evaluation import (
     ndcg_at_k,
     precision_at_k,
     r_precision,
+    rbp_at_k,
     recall_at_k,
     reciprocal_rank,
     reciprocal_rank_at_k,
@@ -211,6 +212,74 @@ class TestERRAtK:
         )
         assert report.err[1] == pytest.approx(0.25)  # mean of 0.5 and 0.0
         assert "err" in report.to_dict()
+
+
+class TestRBPAtK:
+    def test_k_zero_or_negative(self):
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert rbp_at_k(["a"], q, k=0) == 0.0
+        assert rbp_at_k(["a"], q, k=-1) == 0.0
+
+    def test_invalid_persistence_returns_zero(self):
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert rbp_at_k(["a"], q, k=3, persistence=1.0) == 0.0
+        assert rbp_at_k(["a"], q, k=3, persistence=-0.1) == 0.0
+
+    def test_no_relevant_returns_zero(self):
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert rbp_at_k(["x", "y", "z"], q, k=3, persistence=0.8) == 0.0
+
+    def test_binary_relevance_rank_one(self):
+        # Single relevant doc at rank 1, p=0.5 -> RBP = (1-0.5)*1*1 = 0.5
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert rbp_at_k(["a", "x"], q, k=2, persistence=0.5) == pytest.approx(0.5)
+
+    def test_all_relevant_equals_one_minus_p_to_the_k(self):
+        # If every doc in top-k is relevant, RBP@k collapses to
+        # (1-p) * sum_{i=0..k-1} p^i = 1 - p^k.
+        q = EvalQuery(query="q", relevant_docs=["a", "b", "c"])
+        assert rbp_at_k(["a", "b", "c"], q, k=3, persistence=0.5) == pytest.approx(
+            1.0 - 0.5**3
+        )
+
+    def test_deep_relevant_decays_with_low_persistence(self):
+        # A single relevant doc at rank 3 contributes (1-p)*p^2. Lower p
+        # makes deep ranks contribute less (the user gives up earlier).
+        q = EvalQuery(query="q", relevant_docs=["c"])
+        low = rbp_at_k(["x", "y", "c"], q, k=3, persistence=0.2)
+        high = rbp_at_k(["x", "y", "c"], q, k=3, persistence=0.9)
+        assert low == pytest.approx((1.0 - 0.2) * 0.2**2)
+        assert high == pytest.approx((1.0 - 0.9) * 0.9**2)
+        assert high > low
+
+    def test_graded_normalises_by_max_grade(self):
+        # max_grade=3, doc at rank 1 has grade 3 -> g_normalised=1.0;
+        # p=0.5 -> RBP = (1-0.5) * 1.0 * 1 = 0.5
+        q = EvalQuery(
+            query="q",
+            relevant_docs=["a"],
+            relevance_grades={"a": 3},
+        )
+        assert rbp_at_k(["a"], q, k=1, persistence=0.5) == pytest.approx(0.5)
+
+    def test_reported_in_evaluator_aggregate(self):
+        evaluator = RetrievalEvaluator()
+        evaluator.add_queries(
+            [
+                EvalQuery(query="q1", relevant_docs=["a"]),  # rank-1 hit
+                EvalQuery(query="q2", relevant_docs=["z"]),  # miss
+            ]
+        )
+        results = {"q1": ["a", "x"], "q2": ["x", "y"]}
+        report = evaluator.evaluate(
+            lambda query, k: results[query][:k],
+            k_values=[1, 2],
+            rbp_persistence=0.5,
+        )
+        # q1@1: (1-0.5)*1 = 0.5; q2@1: 0 -> mean = 0.25
+        assert report.rbp[1] == pytest.approx(0.25)
+        d = report.to_dict()
+        assert "rbp" in d and d["rbp_persistence"] == 0.5
 
 
 class TestDCGandNDCG:
