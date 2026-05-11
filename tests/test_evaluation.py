@@ -10,6 +10,7 @@ from evaluation import (
     EvalQuery,
     RetrievalEvaluator,
     average_precision,
+    average_precision_at_k,
     dcg_at_k,
     err_at_k,
     f1_at_k,
@@ -280,6 +281,54 @@ class TestRBPAtK:
         assert report.rbp[1] == pytest.approx(0.25)
         d = report.to_dict()
         assert "rbp" in d and d["rbp_persistence"] == 0.5
+
+
+class TestAveragePrecisionAtK:
+    def test_k_zero_or_negative(self):
+        assert average_precision_at_k(["a"], {"a"}, k=0) == 0.0
+        assert average_precision_at_k(["a"], {"a"}, k=-1) == 0.0
+
+    def test_no_relevant_returns_zero(self):
+        assert average_precision_at_k(["a", "b"], set(), k=5) == 0.0
+
+    def test_perfect_top_k_matches_unbounded_ap(self):
+        # All relevant docs at the top within the cutoff -> AP@k == AP == 1.0.
+        retrieved = ["a", "b", "c", "x"]
+        relevant = {"a", "b", "c"}
+        assert average_precision_at_k(retrieved, relevant, k=3) == pytest.approx(1.0)
+        assert average_precision_at_k(retrieved, relevant, k=3) == pytest.approx(
+            average_precision(retrieved, relevant)
+        )
+
+    def test_relevant_outside_cutoff_excluded(self):
+        # relevant={a,b,c}; rank-3 c is excluded by k=2. Only a (rank 1) hits.
+        # AP@2 = (1/3) * (P@1) = (1/3) * 1 = 1/3.
+        assert average_precision_at_k(["a", "x", "c"], {"a", "b", "c"}, k=2) == pytest.approx(
+            1.0 / 3.0
+        )
+
+    def test_normalisation_by_full_relevant_set(self):
+        # TREC AP@k divides by |R|, not min(k, |R|). |R|=4, only "a" hit at rank 1
+        # within k=2 -> AP@2 = (1/4) * 1 = 0.25.
+        assert average_precision_at_k(["a", "x"], {"a", "b", "c", "d"}, k=2) == pytest.approx(
+            0.25
+        )
+
+    def test_reported_in_evaluator_aggregate(self):
+        evaluator = RetrievalEvaluator()
+        evaluator.add_queries(
+            [
+                EvalQuery(query="q1", relevant_docs=["a"]),  # hit at rank 1 -> AP@1 = 1.0
+                EvalQuery(query="q2", relevant_docs=["z"]),  # miss -> 0.0
+            ]
+        )
+        results = {"q1": ["a", "x"], "q2": ["x", "y"]}
+        report = evaluator.evaluate(
+            lambda query, k: results[query][:k], k_values=[1, 2]
+        )
+        # Mean AP@1 over the two queries.
+        assert report.map_at_k[1] == pytest.approx(0.5)
+        assert "map_at_k" in report.to_dict()
 
 
 class TestDCGandNDCG:

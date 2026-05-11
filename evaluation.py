@@ -69,6 +69,7 @@ class EvalResult:
     mrr_at_k: dict[int, float] = field(default_factory=dict)  # k -> RR@k
     err: dict[int, float] = field(default_factory=dict)  # k -> ERR@k (graded)
     rbp: dict[int, float] = field(default_factory=dict)  # k -> RBP@k (user-model)
+    ap_at_k: dict[int, float] = field(default_factory=dict)  # k -> AP@k (truncated AP)
     r_precision: float = 0.0  # P@|R|: precision at the size of the relevant set
 
 
@@ -91,6 +92,7 @@ class EvalReport:
     err: dict[int, float] = field(default_factory=dict)  # Mean ERR@k (graded)
     rbp: dict[int, float] = field(default_factory=dict)  # Mean RBP@k (user-model)
     rbp_persistence: float = 0.8  # p parameter used for the RBP computation
+    map_at_k: dict[int, float] = field(default_factory=dict)  # Mean AP@k (i.e. MAP@k)
     r_precision: float = 0.0  # Mean R-precision (P@|R|) across queries
     model_name: str | None = None
 
@@ -109,6 +111,7 @@ class EvalReport:
             "err": self.err,
             "rbp": self.rbp,
             "rbp_persistence": self.rbp_persistence,
+            "map_at_k": self.map_at_k,
             "r_precision": self.r_precision,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
@@ -198,6 +201,31 @@ def average_precision(retrieved: Sequence[str], relevant: set) -> float:
             sum_precision += hits / i
 
     return sum_precision / len(relevant) if relevant else 0.0
+
+
+def average_precision_at_k(retrieved: Sequence[str], relevant: set, k: int) -> float:
+    """
+    Average Precision with a rank cutoff k (the TREC ``AP@k`` definition).
+
+    Sums ``Precision@i`` over ranks i=1..k where rank i is relevant, then
+    divides by the full size of the relevant set::
+
+        AP@k = (1/|R|) * sum_{i=1..k} P@i * rel(i)
+
+    The aggregate (mean over queries) is ``MAP@k``, the most common
+    cutoff variant of MAP used in RAG and recommender evaluations where
+    only the top-k results reach downstream stages. Returns 0.0 when
+    either ``k <= 0`` or the relevant set is empty.
+    """
+    if k <= 0 or not relevant:
+        return 0.0
+    hits = 0
+    sum_precision = 0.0
+    for i, doc in enumerate(retrieved[:k], 1):
+        if doc in relevant:
+            hits += 1
+            sum_precision += hits / i
+    return sum_precision / len(relevant)
 
 
 def precision_at_k(retrieved: Sequence[str], relevant: set, k: int) -> float:
@@ -489,6 +517,7 @@ class RetrievalEvaluator:
         rr_at_k_scores: dict[int, list[float]] = {k: [] for k in k_values}
         err_scores: dict[int, list[float]] = {k: [] for k in k_values}
         rbp_scores: dict[int, list[float]] = {k: [] for k in k_values}
+        ap_at_k_scores: dict[int, list[float]] = {k: [] for k in k_values}
 
         for eq in self._queries:
             # Retrieve at least |R| docs so R-precision is well-defined even
@@ -513,6 +542,7 @@ class RetrievalEvaluator:
             q_rr_at_k = {}
             q_err = {}
             q_rbp = {}
+            q_ap_at_k = {}
             for k in k_values:
                 q_ndcg[k] = ndcg_at_k(retrieved, eq, k)
                 q_prec[k] = precision_at_k(retrieved, relevant, k)
@@ -522,6 +552,7 @@ class RetrievalEvaluator:
                 q_rr_at_k[k] = reciprocal_rank_at_k(retrieved, relevant, k)
                 q_err[k] = err_at_k(retrieved, eq, k)
                 q_rbp[k] = rbp_at_k(retrieved, eq, k, persistence=rbp_persistence)
+                q_ap_at_k[k] = average_precision_at_k(retrieved, relevant, k)
                 ndcg_scores[k].append(q_ndcg[k])
                 prec_scores[k].append(q_prec[k])
                 rec_scores[k].append(q_rec[k])
@@ -530,6 +561,7 @@ class RetrievalEvaluator:
                 rr_at_k_scores[k].append(q_rr_at_k[k])
                 err_scores[k].append(q_err[k])
                 rbp_scores[k].append(q_rbp[k])
+                ap_at_k_scores[k].append(q_ap_at_k[k])
 
             per_query_results.append(
                 EvalResult(
@@ -546,6 +578,7 @@ class RetrievalEvaluator:
                     mrr_at_k=q_rr_at_k,
                     err=q_err,
                     rbp=q_rbp,
+                    ap_at_k=q_ap_at_k,
                     r_precision=rp,
                 )
             )
@@ -566,6 +599,7 @@ class RetrievalEvaluator:
             err={k: round(float(np.mean(v)), 4) for k, v in err_scores.items()},
             rbp={k: round(float(np.mean(v)), 4) for k, v in rbp_scores.items()},
             rbp_persistence=rbp_persistence,
+            map_at_k={k: round(float(np.mean(v)), 4) for k, v in ap_at_k_scores.items()},
             r_precision=round(float(np.mean(r_prec_scores)), 4),
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),
