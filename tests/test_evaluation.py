@@ -11,6 +11,7 @@ from evaluation import (
     RetrievalEvaluator,
     average_precision,
     dcg_at_k,
+    err_at_k,
     f1_at_k,
     hit_rate_at_k,
     ndcg_at_k,
@@ -156,6 +157,60 @@ class TestRPrecision:
     def test_relevant_below_cutoff_ignored(self):
         # |R|=2, but the second relevant doc is at rank 3 -> P@2 = 1/2
         assert r_precision(["a", "x", "b"], {"a", "b"}) == pytest.approx(0.5)
+
+
+class TestERRAtK:
+    def test_k_zero_or_negative(self):
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert err_at_k(["a"], q, k=0) == 0.0
+        assert err_at_k(["a"], q, k=-1) == 0.0
+
+    def test_no_relevant_returns_zero(self):
+        # All retrieved docs have grade 0 -> ERR is exactly 0.
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert err_at_k(["x", "y", "z"], q, k=3) == 0.0
+
+    def test_binary_relevance_rank_one(self):
+        # Binary grade => max_grade=1, R(1) = 0.5. Doc at rank 1 -> 1*0.5/1
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert err_at_k(["a", "x", "y"], q, k=3) == pytest.approx(0.5)
+
+    def test_graded_perfect_top_rank_score(self):
+        # Highest grade at rank 1: R = (2^3 - 1) / 2^3 = 7/8 -> ERR contribution = 7/8.
+        q = EvalQuery(
+            query="q",
+            relevant_docs=["a", "b"],
+            relevance_grades={"a": 3, "b": 2},
+        )
+        # Only rank 1 contributes meaningfully; rank 2 adds (1 - 7/8) * (3/8) / 2.
+        r1 = 7.0 / 8.0
+        r2 = 3.0 / 8.0
+        expected = r1 + (1.0 - r1) * r2 / 2.0
+        assert err_at_k(["a", "b"], q, k=2) == pytest.approx(expected)
+
+    def test_rank_one_dominates_rank_two(self):
+        # Swapping a relevant doc from rank 2 to rank 1 must increase ERR.
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        worse = err_at_k(["x", "a"], q, k=2)
+        better = err_at_k(["a", "x"], q, k=2)
+        assert better > worse
+
+    def test_reported_in_evaluator_aggregate(self):
+        # End-to-end: ERR appears in EvalReport and to_dict, with the
+        # expected mean across two queries.
+        evaluator = RetrievalEvaluator()
+        evaluator.add_queries(
+            [
+                EvalQuery(query="q1", relevant_docs=["a"]),  # hit at rank 1 -> 0.5
+                EvalQuery(query="q2", relevant_docs=["z"]),  # miss -> 0.0
+            ]
+        )
+        results = {"q1": ["a", "x"], "q2": ["x", "y"]}
+        report = evaluator.evaluate(
+            lambda query, k: results[query][:k], k_values=[1, 2]
+        )
+        assert report.err[1] == pytest.approx(0.25)  # mean of 0.5 and 0.0
+        assert "err" in report.to_dict()
 
 
 class TestDCGandNDCG:

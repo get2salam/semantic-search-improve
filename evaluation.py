@@ -67,6 +67,7 @@ class EvalResult:
     hit_rate: dict[int, float] = field(default_factory=dict)  # k -> HitRate@k
     f1: dict[int, float] = field(default_factory=dict)  # k -> F1@k
     mrr_at_k: dict[int, float] = field(default_factory=dict)  # k -> RR@k
+    err: dict[int, float] = field(default_factory=dict)  # k -> ERR@k (graded)
     r_precision: float = 0.0  # P@|R|: precision at the size of the relevant set
 
 
@@ -86,6 +87,7 @@ class EvalReport:
     hit_rate: dict[int, float] = field(default_factory=dict)  # Mean HitRate@k
     f1: dict[int, float] = field(default_factory=dict)  # Mean F1@k
     mrr_at_k: dict[int, float] = field(default_factory=dict)  # Mean RR@k (MRR with cutoff)
+    err: dict[int, float] = field(default_factory=dict)  # Mean ERR@k (graded)
     r_precision: float = 0.0  # Mean R-precision (P@|R|) across queries
     model_name: str | None = None
 
@@ -101,6 +103,7 @@ class EvalReport:
             "hit_rate": self.hit_rate,
             "f1": self.f1,
             "mrr_at_k": self.mrr_at_k,
+            "err": self.err,
             "r_precision": self.r_precision,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
@@ -252,6 +255,48 @@ def r_precision(retrieved: Sequence[str], relevant: set) -> float:
     return sum(1 for d in top_r if d in relevant) / r
 
 
+def err_at_k(
+    retrieved: Sequence[str],
+    query: EvalQuery,
+    k: int,
+    max_grade: int | None = None,
+) -> float:
+    """
+    Expected Reciprocal Rank at k (Chapelle et al., 2009).
+
+    Models a user who scans the top-k results until satisfied. Each doc has
+    a grade-derived satisfaction probability R(g) = (2^g - 1) / 2^g_max::
+
+        ERR@k = sum_{i=1..k} (1/i) * R(g_i) * prod_{j<i} (1 - R(g_j))
+
+    Unlike NDCG, ERR penalises lower-ranked relevant docs even more
+    heavily because the user is assumed to stop once satisfied, making it
+    well-suited for top-result-quality scoring in RAG and ranking systems.
+    Uses graded relevance via ``EvalQuery.relevance_grades`` when present;
+    otherwise falls back to binary grades (1 if relevant, 0 otherwise).
+    """
+    if k <= 0:
+        return 0.0
+    if max_grade is None:
+        max_grade = (
+            max(query.relevance_grades.values(), default=1)
+            if query.relevance_grades
+            else 1
+        )
+    if max_grade <= 0:
+        return 0.0
+
+    denom = float(2**max_grade)
+    err = 0.0
+    survival = 1.0  # P(user not yet satisfied by previous ranks)
+    for i, doc in enumerate(retrieved[:k], 1):
+        g = query.get_grade(doc)
+        r = (2**g - 1) / denom
+        err += survival * r / i
+        survival *= 1.0 - r
+    return err
+
+
 def dcg_at_k(
     retrieved: Sequence[str],
     query: EvalQuery,
@@ -395,6 +440,7 @@ class RetrievalEvaluator:
         hit_scores: dict[int, list[float]] = {k: [] for k in k_values}
         f1_scores: dict[int, list[float]] = {k: [] for k in k_values}
         rr_at_k_scores: dict[int, list[float]] = {k: [] for k in k_values}
+        err_scores: dict[int, list[float]] = {k: [] for k in k_values}
 
         for eq in self._queries:
             # Retrieve at least |R| docs so R-precision is well-defined even
@@ -417,6 +463,7 @@ class RetrievalEvaluator:
             q_hit = {}
             q_f1 = {}
             q_rr_at_k = {}
+            q_err = {}
             for k in k_values:
                 q_ndcg[k] = ndcg_at_k(retrieved, eq, k)
                 q_prec[k] = precision_at_k(retrieved, relevant, k)
@@ -424,12 +471,14 @@ class RetrievalEvaluator:
                 q_hit[k] = hit_rate_at_k(retrieved, relevant, k)
                 q_f1[k] = f1_at_k(retrieved, relevant, k)
                 q_rr_at_k[k] = reciprocal_rank_at_k(retrieved, relevant, k)
+                q_err[k] = err_at_k(retrieved, eq, k)
                 ndcg_scores[k].append(q_ndcg[k])
                 prec_scores[k].append(q_prec[k])
                 rec_scores[k].append(q_rec[k])
                 hit_scores[k].append(q_hit[k])
                 f1_scores[k].append(q_f1[k])
                 rr_at_k_scores[k].append(q_rr_at_k[k])
+                err_scores[k].append(q_err[k])
 
             per_query_results.append(
                 EvalResult(
@@ -444,6 +493,7 @@ class RetrievalEvaluator:
                     hit_rate=q_hit,
                     f1=q_f1,
                     mrr_at_k=q_rr_at_k,
+                    err=q_err,
                     r_precision=rp,
                 )
             )
@@ -461,6 +511,7 @@ class RetrievalEvaluator:
             hit_rate={k: round(float(np.mean(v)), 4) for k, v in hit_scores.items()},
             f1={k: round(float(np.mean(v)), 4) for k, v in f1_scores.items()},
             mrr_at_k={k: round(float(np.mean(v)), 4) for k, v in rr_at_k_scores.items()},
+            err={k: round(float(np.mean(v)), 4) for k, v in err_scores.items()},
             r_precision=round(float(np.mean(r_prec_scores)), 4),
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),
