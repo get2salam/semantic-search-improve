@@ -146,9 +146,7 @@ class EvalReport:
             rec = self.recall.get(k, 0)
             f1 = self.f1.get(k, 0)
             hit = self.hit_rate.get(k, 0)
-            print(
-                f"  {k:>4}  {ndcg:>8.4f}  {prec:>8.4f}  {rec:>8.4f}  {f1:>8.4f}  {hit:>8.4f}"
-            )
+            print(f"  {k:>4}  {ndcg:>8.4f}  {prec:>8.4f}  {rec:>8.4f}  {f1:>8.4f}  {hit:>8.4f}")
         print(f"{'=' * 60}\n")
 
 
@@ -231,9 +229,7 @@ def average_precision_at_k(retrieved: Sequence[str], relevant: set, k: int) -> f
     return sum_precision / len(relevant)
 
 
-def geometric_mean_average_precision(
-    ap_scores: Sequence[float], epsilon: float = 1e-5
-) -> float:
+def geometric_mean_average_precision(ap_scores: Sequence[float], epsilon: float = 1e-5) -> float:
     """
     Geometric Mean Average Precision (Robertson, 2006).
 
@@ -340,11 +336,7 @@ def err_at_k(
     if k <= 0:
         return 0.0
     if max_grade is None:
-        max_grade = (
-            max(query.relevance_grades.values(), default=1)
-            if query.relevance_grades
-            else 1
-        )
+        max_grade = max(query.relevance_grades.values(), default=1) if query.relevance_grades else 1
     if max_grade <= 0:
         return 0.0
 
@@ -384,11 +376,7 @@ def rbp_at_k(
     if k <= 0 or not 0.0 <= persistence < 1.0:
         return 0.0
     if max_grade is None:
-        max_grade = (
-            max(query.relevance_grades.values(), default=1)
-            if query.relevance_grades
-            else 1
-        )
+        max_grade = max(query.relevance_grades.values(), default=1) if query.relevance_grades else 1
     if max_grade <= 0:
         return 0.0
 

@@ -209,9 +209,7 @@ class TestERRAtK:
             ]
         )
         results = {"q1": ["a", "x"], "q2": ["x", "y"]}
-        report = evaluator.evaluate(
-            lambda query, k: results[query][:k], k_values=[1, 2]
-        )
+        report = evaluator.evaluate(lambda query, k: results[query][:k], k_values=[1, 2])
         assert report.err[1] == pytest.approx(0.25)  # mean of 0.5 and 0.0
         assert "err" in report.to_dict()
 
@@ -240,9 +238,7 @@ class TestRBPAtK:
         # If every doc in top-k is relevant, RBP@k collapses to
         # (1-p) * sum_{i=0..k-1} p^i = 1 - p^k.
         q = EvalQuery(query="q", relevant_docs=["a", "b", "c"])
-        assert rbp_at_k(["a", "b", "c"], q, k=3, persistence=0.5) == pytest.approx(
-            1.0 - 0.5**3
-        )
+        assert rbp_at_k(["a", "b", "c"], q, k=3, persistence=0.5) == pytest.approx(1.0 - 0.5**3)
 
     def test_deep_relevant_decays_with_low_persistence(self):
         # A single relevant doc at rank 3 contributes (1-p)*p^2. Lower p
@@ -311,9 +307,7 @@ class TestAveragePrecisionAtK:
     def test_normalisation_by_full_relevant_set(self):
         # TREC AP@k divides by |R|, not min(k, |R|). |R|=4, only "a" hit at rank 1
         # within k=2 -> AP@2 = (1/4) * 1 = 0.25.
-        assert average_precision_at_k(["a", "x"], {"a", "b", "c", "d"}, k=2) == pytest.approx(
-            0.25
-        )
+        assert average_precision_at_k(["a", "x"], {"a", "b", "c", "d"}, k=2) == pytest.approx(0.25)
 
     def test_reported_in_evaluator_aggregate(self):
         evaluator = RetrievalEvaluator()
@@ -324,9 +318,7 @@ class TestAveragePrecisionAtK:
             ]
         )
         results = {"q1": ["a", "x"], "q2": ["x", "y"]}
-        report = evaluator.evaluate(
-            lambda query, k: results[query][:k], k_values=[1, 2]
-        )
+        report = evaluator.evaluate(lambda query, k: results[query][:k], k_values=[1, 2])
         # Mean AP@1 over the two queries.
         assert report.map_at_k[1] == pytest.approx(0.5)
         assert "map_at_k" in report.to_dict()
@@ -375,9 +367,7 @@ class TestGeometricMeanAveragePrecision:
             ]
         )
         results = {"q1": ["a", "x"], "q2": ["x", "y"]}
-        report = evaluator.evaluate(
-            lambda query, k: results[query][:k], k_values=[1, 2]
-        )
+        report = evaluator.evaluate(lambda query, k: results[query][:k], k_values=[1, 2])
         assert report.gmap == pytest.approx(round(math.sqrt(1e-5), 4))
         assert "gmap" in report.to_dict()
 
@@ -451,9 +441,7 @@ class TestEvaluatorReportsHitRateAndF1:
         # |R|=5 but the user only asks for k_values=[1, 3]. The evaluator must
         # still fetch enough docs to compute R-precision correctly.
         evaluator = RetrievalEvaluator()
-        evaluator.add_queries(
-            [EvalQuery(query="q", relevant_docs=["a", "b", "c", "d", "e"])]
-        )
+        evaluator.add_queries([EvalQuery(query="q", relevant_docs=["a", "b", "c", "d", "e"])])
 
         ranked = ["a", "x", "b", "y", "c"]  # 3 of top-5 relevant -> R-prec=0.6
 
