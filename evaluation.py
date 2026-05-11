@@ -66,6 +66,7 @@ class EvalResult:
     recall: dict[int, float]  # k -> R@k
     hit_rate: dict[int, float] = field(default_factory=dict)  # k -> HitRate@k
     f1: dict[int, float] = field(default_factory=dict)  # k -> F1@k
+    mrr_at_k: dict[int, float] = field(default_factory=dict)  # k -> RR@k
 
 
 @dataclass
@@ -83,6 +84,7 @@ class EvalReport:
     elapsed_seconds: float
     hit_rate: dict[int, float] = field(default_factory=dict)  # Mean HitRate@k
     f1: dict[int, float] = field(default_factory=dict)  # Mean F1@k
+    mrr_at_k: dict[int, float] = field(default_factory=dict)  # Mean RR@k (MRR with cutoff)
     model_name: str | None = None
 
     def to_dict(self) -> dict:
@@ -96,6 +98,7 @@ class EvalReport:
             "recall": self.recall,
             "hit_rate": self.hit_rate,
             "f1": self.f1,
+            "mrr_at_k": self.mrr_at_k,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
         }
@@ -143,6 +146,22 @@ def reciprocal_rank(retrieved: Sequence[str], relevant: set) -> float:
     Returns 0.0 if no relevant document is found in the results.
     """
     for i, doc in enumerate(retrieved, 1):
+        if doc in relevant:
+            return 1.0 / i
+    return 0.0
+
+
+def reciprocal_rank_at_k(retrieved: Sequence[str], relevant: set, k: int) -> float:
+    """
+    Reciprocal Rank with a rank cutoff: 1/rank of the first relevant document
+    among the top-k results, or 0.0 if no relevant doc appears within the cutoff.
+
+    The aggregate (mean over queries) is MRR@k, a standard RAG retrieval metric
+    when only the top-k chunks reach the generator.
+    """
+    if k <= 0:
+        return 0.0
+    for i, doc in enumerate(retrieved[:k], 1):
         if doc in relevant:
             return 1.0 / i
     return 0.0
@@ -355,6 +374,7 @@ class RetrievalEvaluator:
         rec_scores: dict[int, list[float]] = {k: [] for k in k_values}
         hit_scores: dict[int, list[float]] = {k: [] for k in k_values}
         f1_scores: dict[int, list[float]] = {k: [] for k in k_values}
+        rr_at_k_scores: dict[int, list[float]] = {k: [] for k in k_values}
 
         for eq in self._queries:
             # Retrieve
@@ -372,17 +392,20 @@ class RetrievalEvaluator:
             q_rec = {}
             q_hit = {}
             q_f1 = {}
+            q_rr_at_k = {}
             for k in k_values:
                 q_ndcg[k] = ndcg_at_k(retrieved, eq, k)
                 q_prec[k] = precision_at_k(retrieved, relevant, k)
                 q_rec[k] = recall_at_k(retrieved, relevant, k)
                 q_hit[k] = hit_rate_at_k(retrieved, relevant, k)
                 q_f1[k] = f1_at_k(retrieved, relevant, k)
+                q_rr_at_k[k] = reciprocal_rank_at_k(retrieved, relevant, k)
                 ndcg_scores[k].append(q_ndcg[k])
                 prec_scores[k].append(q_prec[k])
                 rec_scores[k].append(q_rec[k])
                 hit_scores[k].append(q_hit[k])
                 f1_scores[k].append(q_f1[k])
+                rr_at_k_scores[k].append(q_rr_at_k[k])
 
             per_query_results.append(
                 EvalResult(
@@ -396,6 +419,7 @@ class RetrievalEvaluator:
                     recall=q_rec,
                     hit_rate=q_hit,
                     f1=q_f1,
+                    mrr_at_k=q_rr_at_k,
                 )
             )
 
@@ -411,6 +435,7 @@ class RetrievalEvaluator:
             recall={k: round(float(np.mean(v)), 4) for k, v in rec_scores.items()},
             hit_rate={k: round(float(np.mean(v)), 4) for k, v in hit_scores.items()},
             f1={k: round(float(np.mean(v)), 4) for k, v in f1_scores.items()},
+            mrr_at_k={k: round(float(np.mean(v)), 4) for k, v in rr_at_k_scores.items()},
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),
             model_name=model_name,

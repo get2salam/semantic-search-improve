@@ -17,6 +17,7 @@ from evaluation import (
     precision_at_k,
     recall_at_k,
     reciprocal_rank,
+    reciprocal_rank_at_k,
 )
 
 
@@ -99,6 +100,29 @@ class TestHitRateAtK:
         assert hit_rate_at_k(["a", "b", "c"], {"a", "b", "c"}, k=3) == 1.0
 
 
+class TestReciprocalRankAtK:
+    def test_first_position_within_cutoff(self):
+        assert reciprocal_rank_at_k(["a", "b", "c"], {"a"}, k=3) == 1.0
+
+    def test_relevant_outside_cutoff_returns_zero(self):
+        # "a" is at rank 4, cutoff k=3 — must not contribute
+        assert reciprocal_rank_at_k(["x", "y", "z", "a"], {"a"}, k=3) == 0.0
+
+    def test_third_position_within_cutoff(self):
+        assert reciprocal_rank_at_k(["x", "y", "a"], {"a"}, k=5) == pytest.approx(1.0 / 3.0)
+
+    def test_k_zero_or_negative(self):
+        assert reciprocal_rank_at_k(["a"], {"a"}, k=0) == 0.0
+        assert reciprocal_rank_at_k(["a"], {"a"}, k=-1) == 0.0
+
+    def test_matches_unbounded_when_k_large(self):
+        retrieved = ["x", "y", "a", "b"]
+        relevant = {"a", "b"}
+        assert reciprocal_rank_at_k(retrieved, relevant, k=10) == reciprocal_rank(
+            retrieved, relevant
+        )
+
+
 class TestF1AtK:
     def test_perfect_precision_and_recall(self):
         # All relevant docs at top, k=2 -> P=1, R=1 -> F1=1
@@ -172,5 +196,8 @@ class TestEvaluatorReportsHitRateAndF1:
         assert report.f1[1] == pytest.approx(0.5)
         # Round-trip via to_dict should expose the new fields
         d = report.to_dict()
-        assert "hit_rate" in d and "f1" in d
+        assert "hit_rate" in d and "f1" in d and "mrr_at_k" in d
         assert d["hit_rate"][3] == pytest.approx(0.5)
+        # q1 hits at rank 1 (RR@k=1.0), q2 misses (RR@k=0.0) -> mean = 0.5
+        assert report.mrr_at_k[3] == pytest.approx(0.5)
+        assert report.mrr_at_k[1] == pytest.approx(0.5)
