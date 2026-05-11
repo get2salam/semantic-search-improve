@@ -94,6 +94,7 @@ class EvalReport:
     rbp_persistence: float = 0.8  # p parameter used for the RBP computation
     map_at_k: dict[int, float] = field(default_factory=dict)  # Mean AP@k (i.e. MAP@k)
     r_precision: float = 0.0  # Mean R-precision (P@|R|) across queries
+    gmap: float = 0.0  # Geometric Mean Average Precision (Robertson, 2006)
     model_name: str | None = None
 
     def to_dict(self) -> dict:
@@ -113,6 +114,7 @@ class EvalReport:
             "rbp_persistence": self.rbp_persistence,
             "map_at_k": self.map_at_k,
             "r_precision": self.r_precision,
+            "gmap": self.gmap,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
         }
@@ -133,6 +135,7 @@ class EvalReport:
         print(f"{'=' * 60}")
         print(f"  MRR:  {self.mrr:.4f}")
         print(f"  MAP:  {self.map_score:.4f}")
+        print(f"  GMAP: {self.gmap:.4f}")
         print(f"  R-Prec: {self.r_precision:.4f}")
         print()
         print(f"  {'k':>4}  {'NDCG@k':>8}  {'P@k':>8}  {'R@k':>8}  {'F1@k':>8}  {'Hit@k':>8}")
@@ -226,6 +229,32 @@ def average_precision_at_k(retrieved: Sequence[str], relevant: set, k: int) -> f
             hits += 1
             sum_precision += hits / i
     return sum_precision / len(relevant)
+
+
+def geometric_mean_average_precision(
+    ap_scores: Sequence[float], epsilon: float = 1e-5
+) -> float:
+    """
+    Geometric Mean Average Precision (Robertson, 2006).
+
+    Aggregates per-query AP scores via the geometric — rather than arithmetic
+    — mean::
+
+        GMAP = exp((1/N) * sum_i log(max(AP_i, epsilon)))
+
+    GMAP is markedly more sensitive to weak queries: a single AP near zero
+    pulls the score down, whereas MAP averages it away. This makes GMAP the
+    standard companion to MAP at TREC's Robust track and in any RAG setting
+    where worst-case retrieval quality matters as much as average-case.
+    ``epsilon`` floors AP values away from zero so ``log`` is well-defined;
+    1e-5 is the TREC convention. Returns 0.0 when no scores are provided.
+    """
+    if not ap_scores:
+        return 0.0
+    if epsilon <= 0.0:
+        raise ValueError("epsilon must be positive")
+    log_sum = sum(math.log(max(ap, epsilon)) for ap in ap_scores)
+    return math.exp(log_sum / len(ap_scores))
 
 
 def precision_at_k(retrieved: Sequence[str], relevant: set, k: int) -> float:
@@ -601,6 +630,7 @@ class RetrievalEvaluator:
             rbp_persistence=rbp_persistence,
             map_at_k={k: round(float(np.mean(v)), 4) for k, v in ap_at_k_scores.items()},
             r_precision=round(float(np.mean(r_prec_scores)), 4),
+            gmap=round(geometric_mean_average_precision(ap_scores), 4),
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),
             model_name=model_name,

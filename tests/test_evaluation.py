@@ -14,6 +14,7 @@ from evaluation import (
     dcg_at_k,
     err_at_k,
     f1_at_k,
+    geometric_mean_average_precision,
     hit_rate_at_k,
     ndcg_at_k,
     precision_at_k,
@@ -329,6 +330,56 @@ class TestAveragePrecisionAtK:
         # Mean AP@1 over the two queries.
         assert report.map_at_k[1] == pytest.approx(0.5)
         assert "map_at_k" in report.to_dict()
+
+
+class TestGeometricMeanAveragePrecision:
+    def test_empty_returns_zero(self):
+        assert geometric_mean_average_precision([]) == 0.0
+
+    def test_single_score_returns_itself(self):
+        assert geometric_mean_average_precision([0.4]) == pytest.approx(0.4)
+
+    def test_geometric_mean_formula(self):
+        # GMAP([0.25, 1.0]) = sqrt(0.25) = 0.5; MAP would be 0.625.
+        assert geometric_mean_average_precision([0.25, 1.0]) == pytest.approx(0.5)
+
+    def test_more_sensitive_to_weak_queries_than_map(self):
+        # One bad query (low AP) should pull GMAP below the arithmetic mean.
+        scores = [0.01, 0.9, 0.9, 0.9]
+        gmap = geometric_mean_average_precision(scores)
+        arithmetic = sum(scores) / len(scores)
+        assert gmap < arithmetic
+
+    def test_zero_ap_floored_by_epsilon(self):
+        # AP=0 would make log undefined; epsilon floors it. Result must be
+        # strictly positive and below the epsilon floor's geometric pull.
+        eps = 1e-5
+        result = geometric_mean_average_precision([0.0, 1.0], epsilon=eps)
+        # sqrt(eps * 1.0) = sqrt(eps)
+        assert result == pytest.approx(math.sqrt(eps))
+
+    def test_invalid_epsilon_raises(self):
+        with pytest.raises(ValueError):
+            geometric_mean_average_precision([0.5], epsilon=0.0)
+        with pytest.raises(ValueError):
+            geometric_mean_average_precision([0.5], epsilon=-1e-5)
+
+    def test_reported_in_evaluator_aggregate(self):
+        # q1 hits at rank 1 (AP=1.0); q2 misses (AP=0.0 -> floored to epsilon).
+        # GMAP = sqrt(1.0 * 1e-5) = sqrt(1e-5), rounded to 4 dp -> 0.0032.
+        evaluator = RetrievalEvaluator()
+        evaluator.add_queries(
+            [
+                EvalQuery(query="q1", relevant_docs=["a"]),
+                EvalQuery(query="q2", relevant_docs=["z"]),
+            ]
+        )
+        results = {"q1": ["a", "x"], "q2": ["x", "y"]}
+        report = evaluator.evaluate(
+            lambda query, k: results[query][:k], k_values=[1, 2]
+        )
+        assert report.gmap == pytest.approx(round(math.sqrt(1e-5), 4))
+        assert "gmap" in report.to_dict()
 
 
 class TestDCGandNDCG:
