@@ -15,6 +15,7 @@ from evaluation import (
     hit_rate_at_k,
     ndcg_at_k,
     precision_at_k,
+    r_precision,
     recall_at_k,
     reciprocal_rank,
     reciprocal_rank_at_k,
@@ -140,6 +141,23 @@ class TestF1AtK:
         assert f1_at_k(["a"], set(), k=3) == 0.0
 
 
+class TestRPrecision:
+    def test_perfect_ranking_is_one(self):
+        # |R|=2, top-2 are both relevant -> R-Precision = 1.0
+        assert r_precision(["a", "b", "x", "y"], {"a", "b"}) == pytest.approx(1.0)
+
+    def test_partial_hit(self):
+        # |R|=3, top-3 contain 2 relevant -> 2/3
+        assert r_precision(["a", "x", "b", "c"], {"a", "b", "c"}) == pytest.approx(2.0 / 3.0)
+
+    def test_no_relevant_returns_zero(self):
+        assert r_precision(["a", "b"], set()) == 0.0
+
+    def test_relevant_below_cutoff_ignored(self):
+        # |R|=2, but the second relevant doc is at rank 3 -> P@2 = 1/2
+        assert r_precision(["a", "x", "b"], {"a", "b"}) == pytest.approx(0.5)
+
+
 class TestDCGandNDCG:
     def test_dcg_binary_relevance(self):
         # rel=[1,0,1] at positions 1,2,3 -> 1/log2(2) + 0 + 1/log2(4) = 1 + 0.5
@@ -201,3 +219,22 @@ class TestEvaluatorReportsHitRateAndF1:
         # q1 hits at rank 1 (RR@k=1.0), q2 misses (RR@k=0.0) -> mean = 0.5
         assert report.mrr_at_k[3] == pytest.approx(0.5)
         assert report.mrr_at_k[1] == pytest.approx(0.5)
+        # q1 R-precision = 1.0 (|R|=1, rank-1 is relevant); q2 R-prec = 0.0
+        assert report.r_precision == pytest.approx(0.5)
+        assert d["r_precision"] == pytest.approx(0.5)
+
+    def test_r_precision_fetches_enough_docs_when_relevant_exceeds_max_k(self):
+        # |R|=5 but the user only asks for k_values=[1, 3]. The evaluator must
+        # still fetch enough docs to compute R-precision correctly.
+        evaluator = RetrievalEvaluator()
+        evaluator.add_queries(
+            [EvalQuery(query="q", relevant_docs=["a", "b", "c", "d", "e"])]
+        )
+
+        ranked = ["a", "x", "b", "y", "c"]  # 3 of top-5 relevant -> R-prec=0.6
+
+        def search_fn(query: str, k: int) -> list[str]:
+            return ranked[:k]
+
+        report = evaluator.evaluate(search_fn, k_values=[1, 3])
+        assert report.r_precision == pytest.approx(0.6)

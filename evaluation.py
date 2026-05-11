@@ -67,6 +67,7 @@ class EvalResult:
     hit_rate: dict[int, float] = field(default_factory=dict)  # k -> HitRate@k
     f1: dict[int, float] = field(default_factory=dict)  # k -> F1@k
     mrr_at_k: dict[int, float] = field(default_factory=dict)  # k -> RR@k
+    r_precision: float = 0.0  # P@|R|: precision at the size of the relevant set
 
 
 @dataclass
@@ -85,6 +86,7 @@ class EvalReport:
     hit_rate: dict[int, float] = field(default_factory=dict)  # Mean HitRate@k
     f1: dict[int, float] = field(default_factory=dict)  # Mean F1@k
     mrr_at_k: dict[int, float] = field(default_factory=dict)  # Mean RR@k (MRR with cutoff)
+    r_precision: float = 0.0  # Mean R-precision (P@|R|) across queries
     model_name: str | None = None
 
     def to_dict(self) -> dict:
@@ -99,6 +101,7 @@ class EvalReport:
             "hit_rate": self.hit_rate,
             "f1": self.f1,
             "mrr_at_k": self.mrr_at_k,
+            "r_precision": self.r_precision,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
         }
@@ -119,6 +122,7 @@ class EvalReport:
         print(f"{'=' * 60}")
         print(f"  MRR:  {self.mrr:.4f}")
         print(f"  MAP:  {self.map_score:.4f}")
+        print(f"  R-Prec: {self.r_precision:.4f}")
         print()
         print(f"  {'k':>4}  {'NDCG@k':>8}  {'P@k':>8}  {'R@k':>8}  {'F1@k':>8}  {'Hit@k':>8}")
         print(f"  {'—' * 4}  {'—' * 8}  {'—' * 8}  {'—' * 8}  {'—' * 8}  {'—' * 8}")
@@ -231,6 +235,21 @@ def f1_at_k(retrieved: Sequence[str], relevant: set, k: int) -> float:
     if p + r == 0.0:
         return 0.0
     return 2.0 * p * r / (p + r)
+
+
+def r_precision(retrieved: Sequence[str], relevant: set) -> float:
+    """
+    R-Precision: precision at rank R, where R = |relevant|.
+
+    A standard TREC IR metric that adapts the cutoff to each query's
+    own relevant-set size, balancing precision and recall without an
+    arbitrary k. Returns 0.0 when no relevant docs are known.
+    """
+    r = len(relevant)
+    if r == 0:
+        return 0.0
+    top_r = retrieved[:r]
+    return sum(1 for d in top_r if d in relevant) / r
 
 
 def dcg_at_k(
@@ -369,6 +388,7 @@ class RetrievalEvaluator:
         per_query_results: list[EvalResult] = []
         rr_scores = []
         ap_scores = []
+        r_prec_scores: list[float] = []
         ndcg_scores: dict[int, list[float]] = {k: [] for k in k_values}
         prec_scores: dict[int, list[float]] = {k: [] for k in k_values}
         rec_scores: dict[int, list[float]] = {k: [] for k in k_values}
@@ -377,15 +397,19 @@ class RetrievalEvaluator:
         rr_at_k_scores: dict[int, list[float]] = {k: [] for k in k_values}
 
         for eq in self._queries:
-            # Retrieve
-            retrieved = search_fn(eq.query, max_k)
+            # Retrieve at least |R| docs so R-precision is well-defined even
+            # when the relevant set is larger than max(k_values).
+            fetch_k = max(max_k, len(eq.relevant_docs))
+            retrieved = search_fn(eq.query, fetch_k)
             relevant = set(eq.relevant_docs)
 
             # Compute metrics
             rr = reciprocal_rank(retrieved, relevant)
             ap = average_precision(retrieved, relevant)
+            rp = r_precision(retrieved, relevant)
             rr_scores.append(rr)
             ap_scores.append(ap)
+            r_prec_scores.append(rp)
 
             q_ndcg = {}
             q_prec = {}
@@ -420,6 +444,7 @@ class RetrievalEvaluator:
                     hit_rate=q_hit,
                     f1=q_f1,
                     mrr_at_k=q_rr_at_k,
+                    r_precision=rp,
                 )
             )
 
@@ -436,6 +461,7 @@ class RetrievalEvaluator:
             hit_rate={k: round(float(np.mean(v)), 4) for k, v in hit_scores.items()},
             f1={k: round(float(np.mean(v)), 4) for k, v in f1_scores.items()},
             mrr_at_k={k: round(float(np.mean(v)), 4) for k, v in rr_at_k_scores.items()},
+            r_precision=round(float(np.mean(r_prec_scores)), 4),
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),
             model_name=model_name,
