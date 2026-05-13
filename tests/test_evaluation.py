@@ -11,6 +11,7 @@ from evaluation import (
     RetrievalEvaluator,
     average_precision,
     average_precision_at_k,
+    bpref,
     dcg_at_k,
     err_at_k,
     f1_at_k,
@@ -160,6 +161,51 @@ class TestRPrecision:
     def test_relevant_below_cutoff_ignored(self):
         # |R|=2, but the second relevant doc is at rank 3 -> P@2 = 1/2
         assert r_precision(["a", "x", "b"], {"a", "b"}) == pytest.approx(0.5)
+
+
+class TestBpref:
+    def test_no_relevant_returns_zero(self):
+        assert bpref(["a", "b"], set(), {"a", "b"}) == 0.0
+
+    def test_perfect_ranking_is_one(self):
+        # All relevants ranked above all judged non-relevants -> Bpref = 1.
+        assert bpref(["a", "b", "x", "y"], {"a", "b"}, {"x", "y"}) == pytest.approx(1.0)
+
+    def test_unjudged_docs_are_ignored(self):
+        # "u" is unjudged: it must NOT be counted as a non-rel penalty even
+        # though it sits above the relevant doc. With no judged non-rels
+        # above "a", Bpref = 1.0.
+        assert bpref(["u", "a"], {"a"}, {"x"}) == pytest.approx(1.0)
+
+    def test_penalty_uses_min_r_n(self):
+        # R=1, N=2, one judged non-rel ranked above the single relevant doc
+        # -> penalty = 1/min(1,2) = 1 -> Bpref = 0.
+        assert bpref(["x", "a"], {"a"}, {"x", "y"}) == pytest.approx(0.0)
+
+    def test_partial_penalty(self):
+        # R=2, N=2. "a" at rank 1: 0 non-rels above -> 1.
+        # "b" at rank 3: 1 non-rel above ("x") -> 1 - 1/2 = 0.5.
+        # Bpref = (1 + 0.5) / 2 = 0.75.
+        assert bpref(["a", "x", "b", "y"], {"a", "b"}, {"x", "y"}) == pytest.approx(0.75)
+
+    def test_missing_relevant_doc_contributes_zero(self):
+        # "b" never retrieved; only "a" contributes. R=2 -> divide by 2.
+        # "a" at rank 1, no non-rels above -> 1. Bpref = 1/2 = 0.5.
+        assert bpref(["a", "x"], {"a", "b"}, {"x"}) == pytest.approx(0.5)
+
+    def test_reported_in_evaluator_aggregate(self):
+        evaluator = RetrievalEvaluator()
+        evaluator.add_queries(
+            [
+                EvalQuery(query="q1", relevant_docs=["a"]),  # rank-1 hit
+                EvalQuery(query="q2", relevant_docs=["z"]),  # miss
+            ]
+        )
+        results = {"q1": ["a", "x"], "q2": ["x", "y"]}
+        report = evaluator.evaluate(lambda query, k: results[query][:k], k_values=[1, 2])
+        # q1: relevant at rank 1, no non-rels above -> 1.0. q2: miss -> 0.
+        assert report.bpref == pytest.approx(0.5)
+        assert "bpref" in report.to_dict()
 
 
 class TestERRAtK:

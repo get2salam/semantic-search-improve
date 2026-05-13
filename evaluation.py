@@ -71,6 +71,7 @@ class EvalResult:
     rbp: dict[int, float] = field(default_factory=dict)  # k -> RBP@k (user-model)
     ap_at_k: dict[int, float] = field(default_factory=dict)  # k -> AP@k (truncated AP)
     r_precision: float = 0.0  # P@|R|: precision at the size of the relevant set
+    bpref: float = 0.0  # Binary Preference (robust to incomplete judgments)
 
 
 @dataclass
@@ -95,6 +96,7 @@ class EvalReport:
     map_at_k: dict[int, float] = field(default_factory=dict)  # Mean AP@k (i.e. MAP@k)
     r_precision: float = 0.0  # Mean R-precision (P@|R|) across queries
     gmap: float = 0.0  # Geometric Mean Average Precision (Robertson, 2006)
+    bpref: float = 0.0  # Mean Bpref (Buckley & Voorhees, 2004)
     model_name: str | None = None
 
     def to_dict(self) -> dict:
@@ -115,6 +117,7 @@ class EvalReport:
             "map_at_k": self.map_at_k,
             "r_precision": self.r_precision,
             "gmap": self.gmap,
+            "bpref": self.bpref,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
         }
@@ -137,6 +140,7 @@ class EvalReport:
         print(f"  MAP:  {self.map_score:.4f}")
         print(f"  GMAP: {self.gmap:.4f}")
         print(f"  R-Prec: {self.r_precision:.4f}")
+        print(f"  Bpref: {self.bpref:.4f}")
         print()
         print(f"  {'k':>4}  {'NDCG@k':>8}  {'P@k':>8}  {'R@k':>8}  {'F1@k':>8}  {'Hit@k':>8}")
         print(f"  {'—' * 4}  {'—' * 8}  {'—' * 8}  {'—' * 8}  {'—' * 8}  {'—' * 8}")
@@ -311,6 +315,42 @@ def r_precision(retrieved: Sequence[str], relevant: set) -> float:
         return 0.0
     top_r = retrieved[:r]
     return sum(1 for d in top_r if d in relevant) / r
+
+
+def bpref(
+    retrieved: Sequence[str],
+    relevant: set,
+    judged_nonrelevant: set,
+) -> float:
+    """
+    Binary Preference (Buckley & Voorhees, 2004).
+
+    A TREC-standard metric designed for evaluation with *incomplete*
+    relevance judgments. Bpref counts how many judged non-relevant
+    documents are ranked above each judged relevant document, ignoring
+    unjudged documents entirely::
+
+        Bpref = (1/R) * sum_{r in retrieved_R} (1 - |N above r| / min(R, N))
+
+    where ``R = |relevant|`` and ``N = |judged_nonrelevant|``. When the
+    judgment pool is complete, Bpref ranks systems similarly to MAP, but
+    it is far more stable than MAP as judgments become sparse — which
+    makes it a useful companion to RBP@k for retrieval pools where many
+    retrieved docs are simply unjudged. Returns 0.0 if no judged
+    relevant docs exist.
+    """
+    r = len(relevant)
+    if r == 0:
+        return 0.0
+    cap = min(r, len(judged_nonrelevant)) or r
+    total = 0.0
+    nonrel_above = 0
+    for doc in retrieved:
+        if doc in relevant:
+            total += 1.0 - min(nonrel_above, cap) / cap
+        elif doc in judged_nonrelevant:
+            nonrel_above += 1
+    return total / r
 
 
 def err_at_k(
@@ -526,6 +566,7 @@ class RetrievalEvaluator:
         rr_scores = []
         ap_scores = []
         r_prec_scores: list[float] = []
+        bpref_scores: list[float] = []
         ndcg_scores: dict[int, list[float]] = {k: [] for k in k_values}
         prec_scores: dict[int, list[float]] = {k: [] for k in k_values}
         rec_scores: dict[int, list[float]] = {k: [] for k in k_values}
@@ -547,9 +588,19 @@ class RetrievalEvaluator:
             rr = reciprocal_rank(retrieved, relevant)
             ap = average_precision(retrieved, relevant)
             rp = r_precision(retrieved, relevant)
+            # Judged non-relevant docs come from grade-0 entries in
+            # relevance_grades; if absent, Bpref falls back to treating any
+            # retrieved non-relevant doc as judged (complete-judgments mode).
+            judged_nonrel = (
+                {d for d, g in eq.relevance_grades.items() if g == 0 and d not in relevant}
+                if eq.relevance_grades
+                else {d for d in retrieved if d not in relevant}
+            )
+            bp = bpref(retrieved, relevant, judged_nonrel)
             rr_scores.append(rr)
             ap_scores.append(ap)
             r_prec_scores.append(rp)
+            bpref_scores.append(bp)
 
             q_ndcg = {}
             q_prec = {}
@@ -597,6 +648,7 @@ class RetrievalEvaluator:
                     rbp=q_rbp,
                     ap_at_k=q_ap_at_k,
                     r_precision=rp,
+                    bpref=bp,
                 )
             )
 
@@ -619,6 +671,7 @@ class RetrievalEvaluator:
             map_at_k={k: round(float(np.mean(v)), 4) for k, v in ap_at_k_scores.items()},
             r_precision=round(float(np.mean(r_prec_scores)), 4),
             gmap=round(geometric_mean_average_precision(ap_scores), 4),
+            bpref=round(float(np.mean(bpref_scores)), 4),
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),
             model_name=model_name,
