@@ -19,6 +19,7 @@ from evaluation import (
     hit_rate_at_k,
     ndcg_at_k,
     precision_at_k,
+    q_measure,
     r_precision,
     rbp_at_k,
     recall_at_k,
@@ -418,6 +419,45 @@ class TestGeometricMeanAveragePrecision:
         assert "gmap" in report.to_dict()
 
 
+class TestQMeasure:
+    def test_no_relevant_returns_zero(self):
+        q = EvalQuery(query="q", relevant_docs=[])
+        assert q_measure(["a", "b"], q) == 0.0
+
+    def test_negative_beta_returns_zero(self):
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert q_measure(["a"], q, beta=-0.5) == 0.0
+
+    def test_perfect_binary_ranking_is_one(self):
+        # All relevant docs at the top with binary grades -> Q = 1.0.
+        q = EvalQuery(query="q", relevant_docs=["a", "b"])
+        assert q_measure(["a", "b", "x"], q, beta=1.0) == pytest.approx(1.0)
+
+    def test_beta_zero_reduces_to_average_precision(self):
+        # With beta=0, BR(i) collapses to count_rel(1..i)/i = P@i, so
+        # Q-measure equals AP. Compare against the binary AP for
+        # retrieved=[a,x,b], relevant={a,b}: AP = (1/1 + 2/3)/2.
+        q = EvalQuery(query="q", relevant_docs=["a", "b"])
+        expected_ap = (1.0 + 2.0 / 3.0) / 2.0
+        assert q_measure(["a", "x", "b"], q, beta=0.0) == pytest.approx(expected_ap)
+
+    def test_graded_imperfect_ranking(self):
+        # Grades a=3, b=2; retrieved=[b,a] (swapped). Ideal CG at ranks
+        # is [3, 5]. BR(1) = (1 + 1*2)/(1 + 1*3) = 3/4.
+        # BR(2) = (2 + 1*5)/(2 + 1*5) = 1.0. Q = (0.75 + 1.0)/2 = 0.875.
+        q = EvalQuery(
+            query="q",
+            relevant_docs=["a", "b"],
+            relevance_grades={"a": 3, "b": 2},
+        )
+        assert q_measure(["b", "a"], q, beta=1.0) == pytest.approx(0.875)
+
+    def test_rank_one_dominates_rank_two(self):
+        # Moving a relevant doc earlier must not decrease Q-measure.
+        q = EvalQuery(query="q", relevant_docs=["a"])
+        assert q_measure(["a", "x"], q) >= q_measure(["x", "a"], q)
+
+
 class TestDCGandNDCG:
     def test_dcg_binary_relevance(self):
         # rel=[1,0,1] at positions 1,2,3 -> 1/log2(2) + 0 + 1/log2(4) = 1 + 0.5
@@ -482,6 +522,22 @@ class TestEvaluatorReportsHitRateAndF1:
         # q1 R-precision = 1.0 (|R|=1, rank-1 is relevant); q2 R-prec = 0.0
         assert report.r_precision == pytest.approx(0.5)
         assert d["r_precision"] == pytest.approx(0.5)
+
+    def test_q_measure_reported_in_evaluator_aggregate(self):
+        # q1: rank-1 hit on a graded query -> Q = 1.0.
+        # q2: miss -> Q = 0.0. Mean Q-measure should be 0.5.
+        evaluator = RetrievalEvaluator()
+        evaluator.add_queries(
+            [
+                EvalQuery(query="q1", relevant_docs=["a"]),
+                EvalQuery(query="q2", relevant_docs=["z"]),
+            ]
+        )
+        results = {"q1": ["a", "x"], "q2": ["x", "y"]}
+        report = evaluator.evaluate(lambda query, k: results[query][:k], k_values=[1, 2])
+        assert report.q_measure == pytest.approx(0.5)
+        d = report.to_dict()
+        assert "q_measure" in d and d["q_measure_beta"] == pytest.approx(1.0)
 
     def test_r_precision_fetches_enough_docs_when_relevant_exceeds_max_k(self):
         # |R|=5 but the user only asks for k_values=[1, 3]. The evaluator must

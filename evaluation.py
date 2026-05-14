@@ -72,6 +72,7 @@ class EvalResult:
     ap_at_k: dict[int, float] = field(default_factory=dict)  # k -> AP@k (truncated AP)
     r_precision: float = 0.0  # P@|R|: precision at the size of the relevant set
     bpref: float = 0.0  # Binary Preference (robust to incomplete judgments)
+    q_measure: float = 0.0  # Sakai Q-measure (graded extension of AP)
 
 
 @dataclass
@@ -97,6 +98,8 @@ class EvalReport:
     r_precision: float = 0.0  # Mean R-precision (P@|R|) across queries
     gmap: float = 0.0  # Geometric Mean Average Precision (Robertson, 2006)
     bpref: float = 0.0  # Mean Bpref (Buckley & Voorhees, 2004)
+    q_measure: float = 0.0  # Mean Q-measure (Sakai, 2004)
+    q_measure_beta: float = 1.0  # blending parameter used for Q-measure
     model_name: str | None = None
 
     def to_dict(self) -> dict:
@@ -118,6 +121,8 @@ class EvalReport:
             "r_precision": self.r_precision,
             "gmap": self.gmap,
             "bpref": self.bpref,
+            "q_measure": self.q_measure,
+            "q_measure_beta": self.q_measure_beta,
             "elapsed_seconds": self.elapsed_seconds,
             "model_name": self.model_name,
         }
@@ -141,6 +146,7 @@ class EvalReport:
         print(f"  GMAP: {self.gmap:.4f}")
         print(f"  R-Prec: {self.r_precision:.4f}")
         print(f"  Bpref: {self.bpref:.4f}")
+        print(f"  Q-meas: {self.q_measure:.4f} (beta={self.q_measure_beta:g})")
         print()
         print(f"  {'k':>4}  {'NDCG@k':>8}  {'P@k':>8}  {'R@k':>8}  {'F1@k':>8}  {'Hit@k':>8}")
         print(f"  {'—' * 4}  {'—' * 8}  {'—' * 8}  {'—' * 8}  {'—' * 8}  {'—' * 8}")
@@ -353,6 +359,53 @@ def bpref(
     return total / r
 
 
+def q_measure(
+    retrieved: Sequence[str],
+    query: EvalQuery,
+    beta: float = 1.0,
+) -> float:
+    """
+    Q-measure (Sakai, 2004).
+
+    A graded extension of Average Precision that blends AP-style
+    rank-position weighting with NDCG-style cumulative gain via the
+    parameter ``beta``::
+
+        BR(i) = (count_rel(1..i) + beta * CG(1..i))
+              / (i              + beta * CG*(1..i))
+
+        Q = (1 / R) * sum_{i: doc_i is relevant} BR(i)
+
+    where ``count_rel(1..i)`` counts judged-relevant docs in the top-i,
+    ``CG`` is the cumulative graded gain, ``CG*`` is its ideal value at
+    rank i, and ``R = |relevant|``. ``beta = 0`` reduces to AP; the
+    default ``beta = 1`` weights count-based and gain-based precision
+    equally, which is the TREC convention. Returns 0.0 when there are
+    no relevant docs or ``beta`` is negative.
+    """
+    relevant = set(query.relevant_docs)
+    r = len(relevant)
+    if r == 0 or beta < 0:
+        return 0.0
+
+    if query.relevance_grades:
+        ideal_grades = sorted(query.relevance_grades.values(), reverse=True)
+    else:
+        ideal_grades = [1] * r
+
+    count_rel = 0
+    cg = 0.0
+    ideal_cg = 0.0
+    total = 0.0
+    for i, doc in enumerate(retrieved, 1):
+        cg += query.get_grade(doc)
+        ideal_cg += ideal_grades[i - 1] if i - 1 < len(ideal_grades) else 0
+        if doc in relevant:
+            count_rel += 1
+            total += (count_rel + beta * cg) / (i + beta * ideal_cg)
+    return total / r
+
+
 def err_at_k(
     retrieved: Sequence[str],
     query: EvalQuery,
@@ -542,6 +595,7 @@ class RetrievalEvaluator:
         k_values: list[int] | None = None,
         model_name: str | None = None,
         rbp_persistence: float = 0.8,
+        q_measure_beta: float = 1.0,
     ) -> EvalReport:
         """
         Run evaluation on all queries.
@@ -567,6 +621,7 @@ class RetrievalEvaluator:
         ap_scores = []
         r_prec_scores: list[float] = []
         bpref_scores: list[float] = []
+        q_measure_scores: list[float] = []
         ndcg_scores: dict[int, list[float]] = {k: [] for k in k_values}
         prec_scores: dict[int, list[float]] = {k: [] for k in k_values}
         rec_scores: dict[int, list[float]] = {k: [] for k in k_values}
@@ -597,10 +652,12 @@ class RetrievalEvaluator:
                 else {d for d in retrieved if d not in relevant}
             )
             bp = bpref(retrieved, relevant, judged_nonrel)
+            qm = q_measure(retrieved, eq, beta=q_measure_beta)
             rr_scores.append(rr)
             ap_scores.append(ap)
             r_prec_scores.append(rp)
             bpref_scores.append(bp)
+            q_measure_scores.append(qm)
 
             q_ndcg = {}
             q_prec = {}
@@ -649,6 +706,7 @@ class RetrievalEvaluator:
                     ap_at_k=q_ap_at_k,
                     r_precision=rp,
                     bpref=bp,
+                    q_measure=qm,
                 )
             )
 
@@ -672,6 +730,8 @@ class RetrievalEvaluator:
             r_precision=round(float(np.mean(r_prec_scores)), 4),
             gmap=round(geometric_mean_average_precision(ap_scores), 4),
             bpref=round(float(np.mean(bpref_scores)), 4),
+            q_measure=round(float(np.mean(q_measure_scores)), 4),
+            q_measure_beta=q_measure_beta,
             per_query=per_query_results,
             elapsed_seconds=round(elapsed, 2),
             model_name=model_name,
