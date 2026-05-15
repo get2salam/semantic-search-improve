@@ -323,6 +323,41 @@ def r_precision(retrieved: Sequence[str], relevant: set) -> float:
     return sum(1 for d in top_r if d in relevant) / r
 
 
+def expected_search_length(
+    retrieved: Sequence[str],
+    relevant: set,
+    n: int = 1,
+) -> float:
+    """
+    Cooper's Expected Search Length (Cooper, 1968).
+
+    Counts the non-relevant documents a user scanning the ranked list in
+    order examines before finding the ``n``-th relevant document::
+
+        ESL = | non-relevant docs ranked above the n-th relevant doc |
+
+    Unlike reciprocal rank, ESL generalises naturally to multi-relevance
+    queries (the ``n > 1`` case) and reports an absolute count of "wasted"
+    user effort instead of a position-weighted score — lower is better,
+    with ``ESL = 0`` meaning the first ``n`` ranks are all relevant. When
+    the retrieval contains fewer than ``n`` relevant docs, ESL falls back
+    to the total non-relevant count seen, so partial-success queries are
+    still penalised proportionally. Returns 0.0 when ``n <= 0``.
+    """
+    if n <= 0:
+        return 0.0
+    found = 0
+    non_rel = 0
+    for doc in retrieved:
+        if doc in relevant:
+            found += 1
+            if found >= n:
+                return float(non_rel)
+        else:
+            non_rel += 1
+    return float(non_rel)
+
+
 def bpref(
     retrieved: Sequence[str],
     relevant: set,

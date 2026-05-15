@@ -14,6 +14,7 @@ from evaluation import (
     bpref,
     dcg_at_k,
     err_at_k,
+    expected_search_length,
     f1_at_k,
     geometric_mean_average_precision,
     hit_rate_at_k,
@@ -162,6 +163,28 @@ class TestRPrecision:
     def test_relevant_below_cutoff_ignored(self):
         # |R|=2, but the second relevant doc is at rank 3 -> P@2 = 1/2
         assert r_precision(["a", "x", "b"], {"a", "b"}) == pytest.approx(0.5)
+
+
+class TestExpectedSearchLength:
+    def test_first_position_is_zero(self):
+        # First doc is relevant, n=1 -> no non-relevant examined
+        assert expected_search_length(["a", "b", "c"], {"a"}, n=1) == 0.0
+
+    def test_counts_non_relevant_above_first_hit(self):
+        # First relevant at rank 3 -> 2 non-relevant before it
+        assert expected_search_length(["x", "y", "a"], {"a"}, n=1) == 2.0
+
+    def test_generalises_to_multiple_relevant(self):
+        # Need n=2 relevant; relevant at ranks 2 and 4 -> 2 non-relevant by rank 4
+        assert expected_search_length(["x", "a", "y", "b"], {"a", "b"}, n=2) == 2.0
+
+    def test_partial_success_returns_total_non_relevant_seen(self):
+        # Only 1 relevant in list, but caller asks for n=2 -> total non-rel = 2
+        assert expected_search_length(["a", "x", "y"], {"a", "b"}, n=2) == 2.0
+
+    def test_non_positive_n_returns_zero(self):
+        assert expected_search_length(["a", "b"], {"a"}, n=0) == 0.0
+        assert expected_search_length(["a", "b"], {"a"}, n=-1) == 0.0
 
 
 class TestBpref:
