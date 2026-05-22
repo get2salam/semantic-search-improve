@@ -77,6 +77,8 @@ class AgentTaskResult:
     search_steps: int
     docs_retrieved: list[str]
     recall_at_final: float  # recall of all retrieved docs vs relevant_docs
+    precision_at_final: float  # precision of all retrieved docs vs relevant_docs
+    f1_at_final: float  # harmonic mean of precision_at_final and recall_at_final
     step_overhead: float  # total_steps / min_steps_required
     queries_issued: list[str]
     tool_diversity: float  # unique tool names / total tool-bearing actions (0 if none)
@@ -92,6 +94,8 @@ class AgentWorkflowReport:
     mean_steps: float
     mean_search_steps: float
     mean_recall: float
+    mean_precision: float  # average precision across tasks
+    mean_f1: float  # average F1 across tasks
     mean_step_overhead: float
     mean_tool_diversity: float  # average tool diversity across tasks
     mean_redundant_queries: float  # average redundant queries per task
@@ -106,6 +110,8 @@ class AgentWorkflowReport:
             f"Mean steps         : {self.mean_steps:.2f}",
             f"Mean search steps  : {self.mean_search_steps:.2f}",
             f"Mean recall        : {self.mean_recall:.3f}",
+            f"Mean precision     : {self.mean_precision:.3f}",
+            f"Mean F1            : {self.mean_f1:.3f}",
             f"Mean step overhead : {self.mean_step_overhead:.2f}x",
             f"Mean tool diversity: {self.mean_tool_diversity:.3f}",
             f"Mean redundant qrys: {self.mean_redundant_queries:.2f}",
@@ -151,6 +157,9 @@ class AgentWorkflowEvaluator:
         relevant_set = set(trace.relevant_docs)
         hits = sum(1 for d in unique_retrieved if d in relevant_set)
         recall = hits / len(relevant_set) if relevant_set else 0.0
+        precision = hits / len(unique_retrieved) if unique_retrieved else 0.0
+        pr_sum = precision + recall
+        f1 = 2 * precision * recall / pr_sum if pr_sum > 0 else 0.0
 
         total_steps = len(trace.actions)
         step_overhead = total_steps / max(trace.min_steps_required, 1)
@@ -173,6 +182,8 @@ class AgentWorkflowEvaluator:
             search_steps=len(search_actions),
             docs_retrieved=unique_retrieved,
             recall_at_final=recall,
+            precision_at_final=precision,
+            f1_at_final=f1,
             step_overhead=step_overhead,
             queries_issued=[a.query for a in search_actions if a.query],
             tool_diversity=tool_diversity,
@@ -193,6 +204,8 @@ class AgentWorkflowEvaluator:
             mean_steps=sum(r.total_steps for r in results) / n,
             mean_search_steps=sum(r.search_steps for r in results) / n,
             mean_recall=sum(r.recall_at_final for r in results) / n,
+            mean_precision=sum(r.precision_at_final for r in results) / n,
+            mean_f1=sum(r.f1_at_final for r in results) / n,
             mean_step_overhead=sum(r.step_overhead for r in results) / n,
             mean_tool_diversity=sum(r.tool_diversity for r in results) / n,
             mean_redundant_queries=sum(r.redundant_queries for r in results) / n,

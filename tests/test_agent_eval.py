@@ -289,6 +289,27 @@ class TestToolDiversityAndRedundancy:
         # task rqa: 1 redundant; task rqb: 0 redundant → mean = 0.5
         assert ev.evaluate().mean_redundant_queries == pytest.approx(0.5)
 
+    def test_report_aggregates_precision_and_f1(self):
+        traces = [
+            _trace(
+                "pf1",
+                [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a", "b"])],
+                success=True,
+                relevant_docs=["a", "b"],  # precision=1.0, recall=1.0, f1=1.0
+            ),
+            _trace(
+                "pf2",
+                [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a", "x"])],
+                success=True,
+                relevant_docs=["a", "b"],  # precision=0.5, recall=0.5, f1=0.5
+            ),
+        ]
+        ev = AgentWorkflowEvaluator()
+        ev.add_traces(traces)
+        report = ev.evaluate()
+        assert report.mean_precision == pytest.approx(0.75)
+        assert report.mean_f1 == pytest.approx(0.75)
+
     def test_report_aggregates_tool_diversity(self):
         traces = [
             _trace(
@@ -314,3 +335,70 @@ class TestToolDiversityAndRedundancy:
         ev.add_traces(traces)
         # tda: 1/2 = 0.5; tdb: 2/2 = 1.0 → mean = 0.75
         assert ev.evaluate().mean_tool_diversity == pytest.approx(0.75)
+
+
+# ---------------------------------------------------------------------------
+# Precision and F1 at final step
+# ---------------------------------------------------------------------------
+
+
+class TestPrecisionAndF1:
+    def test_precision_perfect(self):
+        trace = _trace(
+            "p1",
+            [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a", "b"])],
+            success=True,
+            relevant_docs=["a", "b"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        result = ev.evaluate().per_task[0]
+        assert result.precision_at_final == pytest.approx(1.0)
+        assert result.f1_at_final == pytest.approx(1.0)
+
+    def test_precision_with_noise(self):
+        # agent retrieved 2 relevant + 2 irrelevant docs
+        trace = _trace(
+            "p2",
+            [
+                AgentAction(
+                    step=1, action_type="search", query="q", retrieved_docs=["a", "b", "x", "y"]
+                )
+            ],
+            success=True,
+            relevant_docs=["a", "b"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        result = ev.evaluate().per_task[0]
+        assert result.precision_at_final == pytest.approx(0.5)  # 2/4
+        assert result.recall_at_final == pytest.approx(1.0)  # 2/2
+        assert result.f1_at_final == pytest.approx(2 / 3)  # harmonic mean(0.5, 1.0)
+
+    def test_precision_zero_retrieved_gives_zero(self):
+        trace = _trace(
+            "p3",
+            [AgentAction(step=1, action_type="answer")],
+            success=False,
+            relevant_docs=["a"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        result = ev.evaluate().per_task[0]
+        assert result.precision_at_final == 0.0
+        assert result.f1_at_final == 0.0
+
+    def test_f1_symmetric(self):
+        # precision = 1/3, recall = 1/2 → F1 = 2*(1/3)*(1/2) / (1/3+1/2) = 2/5
+        trace = _trace(
+            "p4",
+            [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a", "x", "y"])],
+            success=True,
+            relevant_docs=["a", "b"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        result = ev.evaluate().per_task[0]
+        assert result.precision_at_final == pytest.approx(1 / 3)
+        assert result.recall_at_final == pytest.approx(1 / 2)
+        assert result.f1_at_final == pytest.approx(2 / 5)
