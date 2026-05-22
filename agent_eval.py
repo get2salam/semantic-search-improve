@@ -1,0 +1,178 @@
+"""
+Agent Workflow Evaluation
+=========================
+Evaluation helpers for agentic search workflows. Measures task
+completion, search efficiency, and step overhead for agents that
+use retrieval as a tool in multi-step reasoning loops.
+
+Usage:
+    from agent_eval import AgentWorkflowEvaluator, AgentTrace, AgentAction
+
+    trace = AgentTrace(
+        task_id="q1",
+        goal="Find documents about contract law",
+        actions=[
+            AgentAction(step=1, action_type="search", query="contract law",
+                        retrieved_docs=["doc1", "doc2"]),
+            AgentAction(step=2, action_type="search", query="breach of contract",
+                        retrieved_docs=["doc3"]),
+            AgentAction(step=3, action_type="answer", retrieved_docs=["doc1", "doc3"]),
+        ],
+        success=True,
+        relevant_docs=["doc1", "doc3"],
+    )
+
+    evaluator = AgentWorkflowEvaluator()
+    evaluator.add_trace(trace)
+    report = evaluator.evaluate()
+    report.print_summary()
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Data Structures
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AgentAction:
+    """A single step in an agent's execution trace."""
+
+    step: int
+    action_type: str  # "search", "select", "answer", "clarify", "escalate"
+    query: str | None = None
+    retrieved_docs: list[str] = field(default_factory=list)
+    tool_name: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AgentTrace:
+    """Full execution trace for a single agent task."""
+
+    task_id: str
+    goal: str
+    actions: list[AgentAction]
+    success: bool
+    relevant_docs: list[str]  # ground-truth relevant docs for this task
+    min_steps_required: int = 1  # theoretical minimum for an oracle agent
+
+
+@dataclass
+class AgentTaskResult:
+    """Evaluation result for a single agent task."""
+
+    task_id: str
+    success: bool
+    total_steps: int
+    search_steps: int
+    docs_retrieved: list[str]
+    recall_at_final: float  # recall of all retrieved docs vs relevant_docs
+    step_overhead: float  # total_steps / min_steps_required
+    queries_issued: list[str]
+
+
+@dataclass
+class AgentWorkflowReport:
+    """Aggregated evaluation across all agent traces."""
+
+    num_tasks: int
+    task_success_rate: float
+    mean_steps: float
+    mean_search_steps: float
+    mean_recall: float
+    mean_step_overhead: float
+    per_task: list[AgentTaskResult]
+
+    def print_summary(self) -> None:
+        lines = [
+            "Agent Workflow Evaluation",
+            "=" * 40,
+            f"Tasks evaluated   : {self.num_tasks}",
+            f"Success rate      : {self.task_success_rate:.3f}",
+            f"Mean steps        : {self.mean_steps:.2f}",
+            f"Mean search steps : {self.mean_search_steps:.2f}",
+            f"Mean recall       : {self.mean_recall:.3f}",
+            f"Mean step overhead: {self.mean_step_overhead:.2f}x",
+        ]
+        print("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Evaluator
+# ---------------------------------------------------------------------------
+
+
+class AgentWorkflowEvaluator:
+    """Evaluates multi-step agentic search workflows.
+
+    Aggregates per-task metrics over a collection of AgentTrace objects
+    and returns an AgentWorkflowReport with summary statistics.
+    """
+
+    def __init__(self) -> None:
+        self._traces: list[AgentTrace] = []
+
+    def add_trace(self, trace: AgentTrace) -> None:
+        """Register a single agent trace for evaluation."""
+        self._traces.append(trace)
+
+    def add_traces(self, traces: list[AgentTrace]) -> None:
+        """Register multiple agent traces at once."""
+        self._traces.extend(traces)
+
+    def _evaluate_trace(self, trace: AgentTrace) -> AgentTaskResult:
+        search_actions = [a for a in trace.actions if a.action_type == "search"]
+
+        # Collect all retrieved docs across all actions, preserving first-seen order.
+        seen: set[str] = set()
+        unique_retrieved: list[str] = []
+        for action in trace.actions:
+            for doc in action.retrieved_docs:
+                if doc not in seen:
+                    seen.add(doc)
+                    unique_retrieved.append(doc)
+
+        relevant_set = set(trace.relevant_docs)
+        hits = sum(1 for d in unique_retrieved if d in relevant_set)
+        recall = hits / len(relevant_set) if relevant_set else 0.0
+
+        total_steps = len(trace.actions)
+        step_overhead = total_steps / max(trace.min_steps_required, 1)
+
+        return AgentTaskResult(
+            task_id=trace.task_id,
+            success=trace.success,
+            total_steps=total_steps,
+            search_steps=len(search_actions),
+            docs_retrieved=unique_retrieved,
+            recall_at_final=recall,
+            step_overhead=step_overhead,
+            queries_issued=[a.query for a in search_actions if a.query],
+        )
+
+    def evaluate(self) -> AgentWorkflowReport:
+        """Evaluate all registered traces and return an aggregated report."""
+        if not self._traces:
+            raise ValueError("No traces to evaluate. Call add_trace() first.")
+
+        results = [self._evaluate_trace(t) for t in self._traces]
+        n = len(results)
+
+        return AgentWorkflowReport(
+            num_tasks=n,
+            task_success_rate=sum(r.success for r in results) / n,
+            mean_steps=sum(r.total_steps for r in results) / n,
+            mean_search_steps=sum(r.search_steps for r in results) / n,
+            mean_recall=sum(r.recall_at_final for r in results) / n,
+            mean_step_overhead=sum(r.step_overhead for r in results) / n,
+            per_task=results,
+        )
