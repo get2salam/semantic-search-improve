@@ -6,6 +6,8 @@ from agent_eval import (
     AgentAction,
     AgentTrace,
     AgentWorkflowEvaluator,
+    FailureMode,
+    classify_failure_mode,
 )
 
 
@@ -402,3 +404,132 @@ class TestPrecisionAndF1:
         assert result.precision_at_final == pytest.approx(1 / 3)
         assert result.recall_at_final == pytest.approx(1 / 2)
         assert result.f1_at_final == pytest.approx(2 / 5)
+
+
+# ---------------------------------------------------------------------------
+# Failure mode taxonomy
+# ---------------------------------------------------------------------------
+
+
+class TestFailureModeTaxonomy:
+    def _eval(self, task_id, actions, success, relevant_docs, min_steps=1):
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(_trace(task_id, actions, success, relevant_docs, min_steps))
+        return ev.evaluate().per_task[0]
+
+    def test_clean_success_mode(self):
+        result = self._eval(
+            "fm1",
+            [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a"])],
+            success=True,
+            relevant_docs=["a"],
+        )
+        assert result.failure_mode == FailureMode.SUCCESS
+
+    def test_no_results_mode(self):
+        result = self._eval(
+            "fm2",
+            [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["x"])],
+            success=False,
+            relevant_docs=["a", "b"],
+        )
+        assert result.failure_mode == FailureMode.NO_RESULTS
+
+    def test_low_recall_mode(self):
+        # recall = 1/4 < 0.5 threshold, task failed
+        result = self._eval(
+            "fm3",
+            [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a"])],
+            success=False,
+            relevant_docs=["a", "b", "c", "d"],
+        )
+        assert result.failure_mode == FailureMode.LOW_RECALL
+
+    def test_inefficient_path_due_to_overhead(self):
+        # success=True but 6 steps vs min_steps=1 → overhead=6 > threshold=2
+        actions = [AgentAction(step=i, action_type="search", query=f"q{i}") for i in range(1, 7)]
+        result = self._eval("fm4", actions, success=True, relevant_docs=[], min_steps=1)
+        assert result.failure_mode == FailureMode.INEFFICIENT_PATH
+
+    def test_inefficient_path_due_to_redundant_queries(self):
+        result = self._eval(
+            "fm5",
+            [
+                AgentAction(step=1, action_type="search", query="dup", retrieved_docs=["a"]),
+                AgentAction(step=2, action_type="search", query="dup", retrieved_docs=["a"]),
+                AgentAction(step=3, action_type="answer"),
+            ],
+            success=True,
+            relevant_docs=["a"],
+            min_steps=1,
+        )
+        assert result.failure_mode == FailureMode.INEFFICIENT_PATH
+
+    def test_failure_mode_stored_on_task_result(self):
+        result = self._eval(
+            "fm6",
+            [AgentAction(step=1, action_type="answer")],
+            success=False,
+            relevant_docs=["a"],
+        )
+        assert isinstance(result.failure_mode, FailureMode)
+
+    def test_failure_mode_distribution(self):
+        traces = [
+            _trace(
+                "d1",
+                [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a"])],
+                True,
+                ["a"],
+            ),
+            _trace(
+                "d2",
+                [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["x"])],
+                False,
+                ["a"],
+            ),
+            _trace(
+                "d3",
+                [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["x"])],
+                False,
+                ["a"],
+            ),
+        ]
+        ev = AgentWorkflowEvaluator()
+        ev.add_traces(traces)
+        dist = ev.evaluate().failure_mode_distribution()
+        assert dist["success"] == 1
+        assert dist["no_results"] == 2
+
+    def test_classify_failure_mode_custom_overhead_threshold(self):
+        # success=True, 3 steps, min_steps=2 → overhead=1.5
+        result = self._eval(
+            "fm7",
+            [
+                AgentAction(step=1, action_type="search", query="q1", retrieved_docs=["a"]),
+                AgentAction(step=2, action_type="search", query="q2"),
+                AgentAction(step=3, action_type="answer"),
+            ],
+            success=True,
+            relevant_docs=["a"],
+            min_steps=2,
+        )
+        # overhead=1.5 is efficient at default threshold (2.0)
+        assert classify_failure_mode(result, overhead_threshold=2.0) == FailureMode.SUCCESS
+        # overhead=1.5 is inefficient at a stricter threshold (1.0)
+        assert classify_failure_mode(result, overhead_threshold=1.0) == FailureMode.INEFFICIENT_PATH
+
+    def test_print_summary_includes_failure_modes(self, capsys):
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(
+            _trace(
+                "ps1",
+                [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a"])],
+                True,
+                ["a"],
+            )
+        )
+        ev.evaluate().print_summary()
+        out = capsys.readouterr().out
+        assert "Failure modes" in out
+        assert "success" in out

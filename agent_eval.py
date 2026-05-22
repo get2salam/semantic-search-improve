@@ -33,9 +33,45 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Failure Mode Taxonomy
+# ---------------------------------------------------------------------------
+
+
+class FailureMode(str, Enum):
+    """Primary reason an agent task underperformed or succeeded efficiently."""
+
+    SUCCESS = "success"
+    INEFFICIENT_PATH = "inefficient_path"  # succeeded but too many steps or redundant queries
+    LOW_RECALL = "low_recall"  # failed; found some relevant docs but below threshold
+    NO_RESULTS = "no_results"  # failed; retrieved no relevant docs at all
+
+
+def classify_failure_mode(
+    result: AgentTaskResult,
+    *,
+    overhead_threshold: float = 2.0,
+) -> FailureMode:
+    """Return the primary failure mode for an evaluated agent task.
+
+    Priority (checked in order):
+    1. NO_RESULTS – failed with zero recall (agent found nothing relevant).
+    2. LOW_RECALL – failed with positive but incomplete recall.
+    3. INEFFICIENT_PATH – succeeded but step overhead exceeded *overhead_threshold*
+       or redundant queries were issued.
+    4. SUCCESS – completed efficiently with adequate recall.
+    """
+    if not result.success:
+        return FailureMode.NO_RESULTS if result.recall_at_final == 0.0 else FailureMode.LOW_RECALL
+    if result.step_overhead > overhead_threshold or result.redundant_queries > 0:
+        return FailureMode.INEFFICIENT_PATH
+    return FailureMode.SUCCESS
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +119,7 @@ class AgentTaskResult:
     queries_issued: list[str]
     tool_diversity: float  # unique tool names / total tool-bearing actions (0 if none)
     redundant_queries: int  # queries issued more than once within this trace
+    failure_mode: FailureMode  # primary reason the task underperformed or succeeded
 
 
 @dataclass
@@ -101,7 +138,14 @@ class AgentWorkflowReport:
     mean_redundant_queries: float  # average redundant queries per task
     per_task: list[AgentTaskResult]
 
+    def failure_mode_distribution(self) -> dict[str, int]:
+        """Return counts of each failure mode across all evaluated tasks."""
+        counts: Counter[str] = Counter(r.failure_mode.value for r in self.per_task)
+        return dict(counts)
+
     def print_summary(self) -> None:
+        dist = self.failure_mode_distribution()
+        dist_str = ", ".join(f"{k}={v}" for k, v in sorted(dist.items()))
         lines = [
             "Agent Workflow Evaluation",
             "=" * 40,
@@ -115,6 +159,7 @@ class AgentWorkflowReport:
             f"Mean step overhead : {self.mean_step_overhead:.2f}x",
             f"Mean tool diversity: {self.mean_tool_diversity:.3f}",
             f"Mean redundant qrys: {self.mean_redundant_queries:.2f}",
+            f"Failure modes      : {dist_str}",
         ]
         print("\n".join(lines))
 
@@ -175,7 +220,7 @@ class AgentWorkflowEvaluator:
         query_counts = Counter(a.query for a in search_actions if a.query)
         redundant_queries = sum(1 for cnt in query_counts.values() if cnt > 1)
 
-        return AgentTaskResult(
+        result = AgentTaskResult(
             task_id=trace.task_id,
             success=trace.success,
             total_steps=total_steps,
@@ -188,7 +233,10 @@ class AgentWorkflowEvaluator:
             queries_issued=[a.query for a in search_actions if a.query],
             tool_diversity=tool_diversity,
             redundant_queries=redundant_queries,
+            failure_mode=FailureMode.SUCCESS,  # placeholder; classified below
         )
+        result.failure_mode = classify_failure_mode(result)
+        return result
 
     def evaluate(self) -> AgentWorkflowReport:
         """Evaluate all registered traces and return an aggregated report."""
