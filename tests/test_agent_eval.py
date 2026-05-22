@@ -182,3 +182,135 @@ class TestAgentWorkflowReport:
         out = capsys.readouterr().out
         assert "Success rate" in out
         assert "Mean recall" in out
+        assert "tool diversity" in out
+        assert "redundant" in out
+
+
+# ---------------------------------------------------------------------------
+# Tool diversity and redundant query metrics
+# ---------------------------------------------------------------------------
+
+
+class TestToolDiversityAndRedundancy:
+    def test_tool_diversity_all_same_tool(self):
+        trace = _trace(
+            "td1",
+            [
+                AgentAction(step=1, action_type="search", query="q1", tool_name="vector_search"),
+                AgentAction(step=2, action_type="search", query="q2", tool_name="vector_search"),
+                AgentAction(step=3, action_type="answer", tool_name="vector_search"),
+            ],
+            success=True,
+            relevant_docs=["a"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        # 1 unique tool / 3 tool-bearing actions = 1/3
+        assert ev.evaluate().per_task[0].tool_diversity == pytest.approx(1 / 3)
+
+    def test_tool_diversity_all_different_tools(self):
+        trace = _trace(
+            "td2",
+            [
+                AgentAction(step=1, action_type="search", query="q1", tool_name="vector_search"),
+                AgentAction(step=2, action_type="search", query="q2", tool_name="keyword_search"),
+                AgentAction(step=3, action_type="answer", tool_name="synthesizer"),
+            ],
+            success=True,
+            relevant_docs=["a"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        # 3 unique tools / 3 tool-bearing actions = 1.0
+        assert ev.evaluate().per_task[0].tool_diversity == pytest.approx(1.0)
+
+    def test_tool_diversity_no_tool_names_gives_zero(self):
+        trace = _trace(
+            "td3",
+            [AgentAction(step=1, action_type="search", query="q")],
+            success=True,
+            relevant_docs=["a"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        assert ev.evaluate().per_task[0].tool_diversity == 0.0
+
+    def test_redundant_queries_detected(self):
+        trace = _trace(
+            "rq1",
+            [
+                AgentAction(step=1, action_type="search", query="contract law"),
+                AgentAction(step=2, action_type="search", query="breach of contract"),
+                AgentAction(step=3, action_type="search", query="contract law"),  # duplicate
+                AgentAction(step=4, action_type="answer"),
+            ],
+            success=True,
+            relevant_docs=["a"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        assert ev.evaluate().per_task[0].redundant_queries == 1
+
+    def test_no_redundant_queries(self):
+        trace = _trace(
+            "rq2",
+            [
+                AgentAction(step=1, action_type="search", query="alpha"),
+                AgentAction(step=2, action_type="search", query="beta"),
+                AgentAction(step=3, action_type="answer"),
+            ],
+            success=True,
+            relevant_docs=["a"],
+        )
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(trace)
+        assert ev.evaluate().per_task[0].redundant_queries == 0
+
+    def test_report_aggregates_redundant_queries(self):
+        traces = [
+            _trace(
+                "rqa",
+                [
+                    AgentAction(step=1, action_type="search", query="q"),
+                    AgentAction(step=2, action_type="search", query="q"),  # duplicate
+                ],
+                success=True,
+                relevant_docs=["a"],
+            ),
+            _trace(
+                "rqb",
+                [AgentAction(step=1, action_type="search", query="unique")],
+                success=True,
+                relevant_docs=["a"],
+            ),
+        ]
+        ev = AgentWorkflowEvaluator()
+        ev.add_traces(traces)
+        # task rqa: 1 redundant; task rqb: 0 redundant → mean = 0.5
+        assert ev.evaluate().mean_redundant_queries == pytest.approx(0.5)
+
+    def test_report_aggregates_tool_diversity(self):
+        traces = [
+            _trace(
+                "tda",
+                [
+                    AgentAction(step=1, action_type="search", query="q", tool_name="search"),
+                    AgentAction(step=2, action_type="answer", tool_name="search"),
+                ],
+                success=True,
+                relevant_docs=["a"],
+            ),
+            _trace(
+                "tdb",
+                [
+                    AgentAction(step=1, action_type="search", query="q", tool_name="search"),
+                    AgentAction(step=2, action_type="answer", tool_name="synth"),
+                ],
+                success=True,
+                relevant_docs=["a"],
+            ),
+        ]
+        ev = AgentWorkflowEvaluator()
+        ev.add_traces(traces)
+        # tda: 1/2 = 0.5; tdb: 2/2 = 1.0 → mean = 0.75
+        assert ev.evaluate().mean_tool_diversity == pytest.approx(0.75)

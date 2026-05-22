@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -78,6 +79,8 @@ class AgentTaskResult:
     recall_at_final: float  # recall of all retrieved docs vs relevant_docs
     step_overhead: float  # total_steps / min_steps_required
     queries_issued: list[str]
+    tool_diversity: float  # unique tool names / total tool-bearing actions (0 if none)
+    redundant_queries: int  # queries issued more than once within this trace
 
 
 @dataclass
@@ -90,18 +93,22 @@ class AgentWorkflowReport:
     mean_search_steps: float
     mean_recall: float
     mean_step_overhead: float
+    mean_tool_diversity: float  # average tool diversity across tasks
+    mean_redundant_queries: float  # average redundant queries per task
     per_task: list[AgentTaskResult]
 
     def print_summary(self) -> None:
         lines = [
             "Agent Workflow Evaluation",
             "=" * 40,
-            f"Tasks evaluated   : {self.num_tasks}",
-            f"Success rate      : {self.task_success_rate:.3f}",
-            f"Mean steps        : {self.mean_steps:.2f}",
-            f"Mean search steps : {self.mean_search_steps:.2f}",
-            f"Mean recall       : {self.mean_recall:.3f}",
-            f"Mean step overhead: {self.mean_step_overhead:.2f}x",
+            f"Tasks evaluated    : {self.num_tasks}",
+            f"Success rate       : {self.task_success_rate:.3f}",
+            f"Mean steps         : {self.mean_steps:.2f}",
+            f"Mean search steps  : {self.mean_search_steps:.2f}",
+            f"Mean recall        : {self.mean_recall:.3f}",
+            f"Mean step overhead : {self.mean_step_overhead:.2f}x",
+            f"Mean tool diversity: {self.mean_tool_diversity:.3f}",
+            f"Mean redundant qrys: {self.mean_redundant_queries:.2f}",
         ]
         print("\n".join(lines))
 
@@ -148,6 +155,17 @@ class AgentWorkflowEvaluator:
         total_steps = len(trace.actions)
         step_overhead = total_steps / max(trace.min_steps_required, 1)
 
+        # Tool diversity: unique tool names / total tool-bearing actions.
+        # High diversity means the agent uses a broad mix of tools; low diversity
+        # signals over-reliance on a single tool.
+        tool_names = [a.tool_name for a in trace.actions if a.tool_name]
+        tool_diversity = len(set(tool_names)) / len(tool_names) if tool_names else 0.0
+
+        # Redundant queries: number of distinct queries issued more than once.
+        # Repeated queries waste tool calls without new information.
+        query_counts = Counter(a.query for a in search_actions if a.query)
+        redundant_queries = sum(1 for cnt in query_counts.values() if cnt > 1)
+
         return AgentTaskResult(
             task_id=trace.task_id,
             success=trace.success,
@@ -157,6 +175,8 @@ class AgentWorkflowEvaluator:
             recall_at_final=recall,
             step_overhead=step_overhead,
             queries_issued=[a.query for a in search_actions if a.query],
+            tool_diversity=tool_diversity,
+            redundant_queries=redundant_queries,
         )
 
     def evaluate(self) -> AgentWorkflowReport:
@@ -174,5 +194,7 @@ class AgentWorkflowEvaluator:
             mean_search_steps=sum(r.search_steps for r in results) / n,
             mean_recall=sum(r.recall_at_final for r in results) / n,
             mean_step_overhead=sum(r.step_overhead for r in results) / n,
+            mean_tool_diversity=sum(r.tool_diversity for r in results) / n,
+            mean_redundant_queries=sum(r.redundant_queries for r in results) / n,
             per_task=results,
         )
