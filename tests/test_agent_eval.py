@@ -501,6 +501,63 @@ class TestFailureModeTaxonomy:
         assert dist["success"] == 1
         assert dist["no_results"] == 2
 
+    def test_noisy_results_mode(self):
+        # success=True, retrieved 1 relevant + 4 irrelevant → precision=0.2 < 0.3 threshold
+        result = self._eval(
+            "fm_noise",
+            [
+                AgentAction(
+                    step=1,
+                    action_type="search",
+                    query="q",
+                    retrieved_docs=["a", "x", "y", "z", "w"],
+                ),
+            ],
+            success=True,
+            relevant_docs=["a"],
+        )
+        assert result.failure_mode == FailureMode.NOISY_RESULTS
+
+    def test_noisy_results_skipped_when_no_relevant_docs(self):
+        # success=True, no ground-truth relevant docs — precision is 0 but not "noisy"
+        result = self._eval(
+            "fm_noise_skip",
+            [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["x"])],
+            success=True,
+            relevant_docs=[],
+        )
+        assert result.failure_mode == FailureMode.SUCCESS
+
+    def test_noisy_results_takes_priority_over_inefficient_path(self):
+        # Both noisy (precision=0.25) and inefficient (3 steps vs min=1) → noisy wins
+        result = self._eval(
+            "fm_priority",
+            [
+                AgentAction(
+                    step=1, action_type="search", query="q1", retrieved_docs=["a", "x", "y", "z"]
+                ),
+                AgentAction(step=2, action_type="search", query="q2"),
+                AgentAction(step=3, action_type="answer"),
+            ],
+            success=True,
+            relevant_docs=["a"],
+            min_steps=1,
+        )
+        assert result.failure_mode == FailureMode.NOISY_RESULTS
+
+    def test_classify_failure_mode_custom_precision_threshold(self):
+        # precision = 0.5 (1 relevant + 1 noise)
+        result = self._eval(
+            "fm_pt",
+            [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a", "x"])],
+            success=True,
+            relevant_docs=["a"],
+        )
+        # 0.5 is acceptable at default threshold (0.3)
+        assert classify_failure_mode(result, precision_threshold=0.3) == FailureMode.SUCCESS
+        # 0.5 is noisy at a stricter threshold (0.8)
+        assert classify_failure_mode(result, precision_threshold=0.8) == FailureMode.NOISY_RESULTS
+
     def test_classify_failure_mode_custom_overhead_threshold(self):
         # success=True, 3 steps, min_steps=2 → overhead=1.5
         result = self._eval(

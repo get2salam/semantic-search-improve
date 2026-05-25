@@ -49,6 +49,7 @@ class FailureMode(str, Enum):
 
     SUCCESS = "success"
     INEFFICIENT_PATH = "inefficient_path"  # succeeded but too many steps or redundant queries
+    NOISY_RESULTS = "noisy_results"  # succeeded but precision below threshold (high noise)
     LOW_RECALL = "low_recall"  # failed; found some relevant docs but below threshold
     NO_RESULTS = "no_results"  # failed; retrieved no relevant docs at all
 
@@ -57,18 +58,24 @@ def classify_failure_mode(
     result: AgentTaskResult,
     *,
     overhead_threshold: float = 2.0,
+    precision_threshold: float = 0.3,
 ) -> FailureMode:
     """Return the primary failure mode for an evaluated agent task.
 
     Priority (checked in order):
     1. NO_RESULTS – failed with zero recall (agent found nothing relevant).
     2. LOW_RECALL – failed with positive but incomplete recall.
-    3. INEFFICIENT_PATH – succeeded but step overhead exceeded *overhead_threshold*
+    3. NOISY_RESULTS – succeeded but precision is below *precision_threshold*,
+       meaning the agent retrieved many irrelevant docs alongside the right ones.
+       Skipped when the task has no ground-truth relevant docs.
+    4. INEFFICIENT_PATH – succeeded but step overhead exceeded *overhead_threshold*
        or redundant queries were issued.
-    4. SUCCESS – completed efficiently with adequate recall.
+    5. SUCCESS – completed efficiently with adequate recall and precision.
     """
     if not result.success:
         return FailureMode.NO_RESULTS if result.recall_at_final == 0.0 else FailureMode.LOW_RECALL
+    if result.recall_at_final > 0 and result.precision_at_final < precision_threshold:
+        return FailureMode.NOISY_RESULTS
     if result.step_overhead > overhead_threshold or result.redundant_queries > 0:
         return FailureMode.INEFFICIENT_PATH
     return FailureMode.SUCCESS
