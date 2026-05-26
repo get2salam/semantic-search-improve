@@ -150,6 +150,25 @@ class AgentWorkflowReport:
         counts: Counter[str] = Counter(r.failure_mode.value for r in self.per_task)
         return dict(counts)
 
+    def failure_mode_rates(self) -> dict[str, float]:
+        """Return the share of tasks in each failure mode (fractions summing to 1.0).
+
+        Useful for comparing failure-mode breakdowns across runs of different
+        sizes, where raw counts would not be directly comparable.
+        """
+        if not self.per_task:
+            return {}
+        total = len(self.per_task)
+        return {mode: count / total for mode, count in self.failure_mode_distribution().items()}
+
+    def tasks_with_failure_mode(self, mode: FailureMode) -> list[AgentTaskResult]:
+        """Return all per-task results whose primary failure mode matches *mode*.
+
+        Handy for drilling into a specific failure class (e.g. inspecting every
+        NOISY_RESULTS task) without re-scanning per_task by hand.
+        """
+        return [r for r in self.per_task if r.failure_mode == mode]
+
     def print_summary(self) -> None:
         dist = self.failure_mode_distribution()
         dist_str = ", ".join(f"{k}={v}" for k, v in sorted(dist.items()))

@@ -497,9 +497,20 @@ class TestFailureModeTaxonomy:
         ]
         ev = AgentWorkflowEvaluator()
         ev.add_traces(traces)
-        dist = ev.evaluate().failure_mode_distribution()
+        report = ev.evaluate()
+        dist = report.failure_mode_distribution()
         assert dist["success"] == 1
         assert dist["no_results"] == 2
+
+        rates = report.failure_mode_rates()
+        assert rates["success"] == pytest.approx(1 / 3)
+        assert rates["no_results"] == pytest.approx(2 / 3)
+        assert sum(rates.values()) == pytest.approx(1.0)
+
+        no_results_tasks = report.tasks_with_failure_mode(FailureMode.NO_RESULTS)
+        assert {r.task_id for r in no_results_tasks} == {"d2", "d3"}
+        assert report.tasks_with_failure_mode(FailureMode.SUCCESS)[0].task_id == "d1"
+        assert report.tasks_with_failure_mode(FailureMode.LOW_RECALL) == []
 
     def test_noisy_results_mode(self):
         # success=True, retrieved 1 relevant + 4 irrelevant → precision=0.2 < 0.3 threshold
