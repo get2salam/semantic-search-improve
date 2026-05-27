@@ -587,6 +587,40 @@ class TestFailureModeTaxonomy:
         # overhead=1.5 is inefficient at a stricter threshold (1.0)
         assert classify_failure_mode(result, overhead_threshold=1.0) == FailureMode.INEFFICIENT_PATH
 
+    def test_evaluator_respects_custom_precision_threshold(self):
+        # precision = 0.5 (1 relevant + 1 noise); default threshold 0.3 → SUCCESS,
+        # stricter threshold 0.8 → NOISY_RESULTS. The evaluator must pass the
+        # configured threshold through to classify_failure_mode.
+        actions = [
+            AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a", "x"]),
+        ]
+        relevant = ["a"]
+
+        lenient = AgentWorkflowEvaluator(precision_threshold=0.3)
+        lenient.add_trace(_trace("cfg_p", actions, success=True, relevant_docs=relevant))
+        assert lenient.evaluate().per_task[0].failure_mode == FailureMode.SUCCESS
+
+        strict = AgentWorkflowEvaluator(precision_threshold=0.8)
+        strict.add_trace(_trace("cfg_p", actions, success=True, relevant_docs=relevant))
+        assert strict.evaluate().per_task[0].failure_mode == FailureMode.NOISY_RESULTS
+
+    def test_evaluator_respects_custom_overhead_threshold(self):
+        # 3 steps vs min_steps=2 → overhead=1.5; lenient default 2.0 → SUCCESS,
+        # strict threshold 1.0 → INEFFICIENT_PATH.
+        actions = [
+            AgentAction(step=1, action_type="search", query="q1", retrieved_docs=["a"]),
+            AgentAction(step=2, action_type="search", query="q2"),
+            AgentAction(step=3, action_type="answer"),
+        ]
+
+        lenient = AgentWorkflowEvaluator(overhead_threshold=2.0)
+        lenient.add_trace(_trace("cfg_o", actions, True, ["a"], min_steps=2))
+        assert lenient.evaluate().per_task[0].failure_mode == FailureMode.SUCCESS
+
+        strict = AgentWorkflowEvaluator(overhead_threshold=1.0)
+        strict.add_trace(_trace("cfg_o", actions, True, ["a"], min_steps=2))
+        assert strict.evaluate().per_task[0].failure_mode == FailureMode.INEFFICIENT_PATH
+
     def test_print_summary_includes_failure_modes(self, capsys):
         ev = AgentWorkflowEvaluator()
         ev.add_trace(

@@ -202,8 +202,15 @@ class AgentWorkflowEvaluator:
     and returns an AgentWorkflowReport with summary statistics.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        overhead_threshold: float = 2.0,
+        precision_threshold: float = 0.3,
+    ) -> None:
         self._traces: list[AgentTrace] = []
+        self.overhead_threshold = overhead_threshold
+        self.precision_threshold = precision_threshold
 
     def add_trace(self, trace: AgentTrace) -> None:
         """Register a single agent trace for evaluation."""
@@ -261,7 +268,11 @@ class AgentWorkflowEvaluator:
             redundant_queries=redundant_queries,
             failure_mode=FailureMode.SUCCESS,  # placeholder; classified below
         )
-        result.failure_mode = classify_failure_mode(result)
+        result.failure_mode = classify_failure_mode(
+            result,
+            overhead_threshold=self.overhead_threshold,
+            precision_threshold=self.precision_threshold,
+        )
         return result
 
     def evaluate(self) -> AgentWorkflowReport:
