@@ -135,6 +135,7 @@ class AgentWorkflowReport:
 
     num_tasks: int
     task_success_rate: float
+    clean_success_rate: float  # fraction of tasks classified as FailureMode.SUCCESS
     mean_steps: float
     mean_search_steps: float
     mean_recall: float
@@ -177,6 +178,7 @@ class AgentWorkflowReport:
             "=" * 40,
             f"Tasks evaluated    : {self.num_tasks}",
             f"Success rate       : {self.task_success_rate:.3f}",
+            f"Clean success rate : {self.clean_success_rate:.3f}",
             f"Mean steps         : {self.mean_steps:.2f}",
             f"Mean search steps  : {self.mean_search_steps:.2f}",
             f"Mean recall        : {self.mean_recall:.3f}",
@@ -283,9 +285,11 @@ class AgentWorkflowEvaluator:
         results = [self._evaluate_trace(t) for t in self._traces]
         n = len(results)
 
+        clean_successes = sum(1 for r in results if r.failure_mode == FailureMode.SUCCESS)
         return AgentWorkflowReport(
             num_tasks=n,
             task_success_rate=sum(r.success for r in results) / n,
+            clean_success_rate=clean_successes / n,
             mean_steps=sum(r.total_steps for r in results) / n,
             mean_search_steps=sum(r.search_steps for r in results) / n,
             mean_recall=sum(r.recall_at_final for r in results) / n,

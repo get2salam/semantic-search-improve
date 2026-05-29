@@ -635,3 +635,63 @@ class TestFailureModeTaxonomy:
         out = capsys.readouterr().out
         assert "Failure modes" in out
         assert "success" in out
+
+
+# ---------------------------------------------------------------------------
+# Clean success rate
+# ---------------------------------------------------------------------------
+
+
+class TestCleanSuccessRate:
+    def test_clean_success_rate_excludes_noisy_and_inefficient(self):
+        # Three success=True traces: one clean SUCCESS, one NOISY_RESULTS,
+        # one INEFFICIENT_PATH (redundant query). Raw success rate is 1.0,
+        # but clean_success_rate is 1/3.
+        traces = [
+            _trace(
+                "clean",
+                [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a"])],
+                success=True,
+                relevant_docs=["a"],
+            ),
+            _trace(
+                "noisy",
+                [
+                    AgentAction(
+                        step=1,
+                        action_type="search",
+                        query="q",
+                        retrieved_docs=["a", "x", "y", "z", "w"],
+                    ),
+                ],
+                success=True,
+                relevant_docs=["a"],
+            ),
+            _trace(
+                "inefficient",
+                [
+                    AgentAction(step=1, action_type="search", query="dup", retrieved_docs=["a"]),
+                    AgentAction(step=2, action_type="search", query="dup", retrieved_docs=["a"]),
+                ],
+                success=True,
+                relevant_docs=["a"],
+            ),
+        ]
+        ev = AgentWorkflowEvaluator()
+        ev.add_traces(traces)
+        report = ev.evaluate()
+        assert report.task_success_rate == pytest.approx(1.0)
+        assert report.clean_success_rate == pytest.approx(1 / 3)
+
+    def test_clean_success_rate_in_print_summary(self, capsys):
+        ev = AgentWorkflowEvaluator()
+        ev.add_trace(
+            _trace(
+                "cs1",
+                [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a"])],
+                True,
+                ["a"],
+            )
+        )
+        ev.evaluate().print_summary()
+        assert "Clean success rate" in capsys.readouterr().out
