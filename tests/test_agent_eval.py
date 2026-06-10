@@ -8,6 +8,7 @@ from agent_eval import (
     AgentWorkflowEvaluator,
     FailureMode,
     classify_failure_mode,
+    compare_reports,
 )
 
 
@@ -695,3 +696,193 @@ class TestCleanSuccessRate:
         )
         ev.evaluate().print_summary()
         assert "Clean success rate" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Report comparison (baseline → candidate regression detection)
+# ---------------------------------------------------------------------------
+
+
+def _report(traces):
+    ev = AgentWorkflowEvaluator()
+    ev.add_traces(traces)
+    return ev.evaluate()
+
+
+def _clean_trace(task_id="t"):
+    return _trace(
+        task_id,
+        [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a"])],
+        success=True,
+        relevant_docs=["a"],
+    )
+
+
+def _noisy_trace(task_id="t"):
+    return _trace(
+        task_id,
+        [
+            AgentAction(
+                step=1,
+                action_type="search",
+                query="q",
+                retrieved_docs=["a", "x", "y", "z", "w"],
+            )
+        ],
+        success=True,
+        relevant_docs=["a"],
+    )
+
+
+def _no_results_trace(task_id="t"):
+    return _trace(
+        task_id,
+        [AgentAction(step=1, action_type="search", query="q", retrieved_docs=["x"])],
+        success=False,
+        relevant_docs=["a"],
+    )
+
+
+class TestCompareReports:
+    def test_identical_reports_have_no_regressions(self):
+        report = _report([_clean_trace("t1"), _clean_trace("t2")])
+        diff = compare_reports(report, report)
+        assert diff.improvements == []
+        assert diff.regressions == []
+        assert not diff.has_regression()
+
+    def test_higher_is_better_metric_improvement(self):
+        # baseline: 1 success + 1 failure → success_rate 0.5
+        # candidate: 2 successes → success_rate 1.0
+        baseline = _report([_clean_trace("a"), _no_results_trace("b")])
+        candidate = _report([_clean_trace("a"), _clean_trace("b")])
+        diff = compare_reports(baseline, candidate)
+
+        success_metric = next(m for m in diff.metrics if m.name == "task_success_rate")
+        assert success_metric.delta == pytest.approx(0.5)
+        assert success_metric.is_improvement
+        assert not success_metric.is_regression
+        assert success_metric in diff.improvements
+
+    def test_higher_is_better_metric_regression(self):
+        # Drop from all-success baseline to half-success candidate
+        baseline = _report([_clean_trace("a"), _clean_trace("b")])
+        candidate = _report([_clean_trace("a"), _no_results_trace("b")])
+        diff = compare_reports(baseline, candidate)
+
+        recall = next(m for m in diff.metrics if m.name == "mean_recall")
+        assert recall.delta == pytest.approx(-0.5)
+        assert recall.is_regression
+        assert not recall.is_improvement
+        assert diff.has_regression()
+
+    def test_lower_is_better_metric_improvement(self):
+        # Candidate uses fewer steps than baseline → mean_steps drop is an improvement
+        long_trace = _trace(
+            "long",
+            [
+                AgentAction(step=1, action_type="search", query="q1", retrieved_docs=["a"]),
+                AgentAction(step=2, action_type="search", query="q2"),
+                AgentAction(step=3, action_type="answer"),
+            ],
+            success=True,
+            relevant_docs=["a"],
+        )
+        baseline = _report([long_trace])
+        candidate = _report([_clean_trace("short")])
+        diff = compare_reports(baseline, candidate)
+
+        steps = next(m for m in diff.metrics if m.name == "mean_steps")
+        assert steps.delta == pytest.approx(-2.0)
+        assert steps.is_improvement
+        assert not steps.is_regression
+
+    def test_lower_is_better_metric_regression(self):
+        # Candidate has redundant query, baseline does not
+        baseline = _report([_clean_trace("a")])
+        candidate = _report(
+            [
+                _trace(
+                    "dup",
+                    [
+                        AgentAction(step=1, action_type="search", query="q", retrieved_docs=["a"]),
+                        AgentAction(step=2, action_type="search", query="q", retrieved_docs=["a"]),
+                    ],
+                    success=True,
+                    relevant_docs=["a"],
+                )
+            ]
+        )
+        diff = compare_reports(baseline, candidate)
+
+        redundant = next(m for m in diff.metrics if m.name == "mean_redundant_queries")
+        assert redundant.delta == pytest.approx(1.0)
+        assert redundant.is_regression
+        assert diff.has_regression()
+
+    def test_tolerance_filters_noise(self):
+        # Build two reports with identical metrics — both rely on the same
+        # AgentTrace, so deltas should be exactly zero. Negative tolerance
+        # is rejected; non-negative tolerances treat exact zeros as no-change.
+        report = _report([_clean_trace("t1")])
+        diff = compare_reports(report, report, tolerance=0.01)
+        # All deltas are exactly zero; nothing should be flagged.
+        assert diff.improvements == []
+        assert diff.regressions == []
+
+    def test_negative_tolerance_rejected(self):
+        report = _report([_clean_trace("t1")])
+        with pytest.raises(ValueError, match="tolerance"):
+            compare_reports(report, report, tolerance=-0.1)
+
+    def test_failure_mode_rate_deltas(self):
+        # baseline: 1 clean success + 1 no_results
+        # candidate: 2 noisy
+        baseline = _report([_clean_trace("a"), _no_results_trace("b")])
+        candidate = _report([_noisy_trace("a"), _noisy_trace("b")])
+        diff = compare_reports(baseline, candidate)
+
+        # baseline rates: success=0.5, no_results=0.5
+        # candidate rates: noisy_results=1.0
+        assert diff.failure_mode_rate_deltas["success"] == pytest.approx(-0.5)
+        assert diff.failure_mode_rate_deltas["no_results"] == pytest.approx(-0.5)
+        assert diff.failure_mode_rate_deltas["noisy_results"] == pytest.approx(1.0)
+
+    def test_metric_delta_zero_is_neither_improvement_nor_regression(self):
+        report = _report([_clean_trace("t1")])
+        diff = compare_reports(report, report)
+        for m in diff.metrics:
+            assert m.delta == 0
+            assert not m.is_improvement
+            assert not m.is_regression
+
+    def test_print_summary_runs(self, capsys):
+        baseline = _report([_clean_trace("a"), _no_results_trace("b")])
+        candidate = _report([_clean_trace("a"), _clean_trace("b")])
+        compare_reports(baseline, candidate).print_summary()
+        out = capsys.readouterr().out
+        assert "Agent Workflow Comparison" in out
+        assert "task_success_rate" in out
+        assert "Regressions" in out
+        assert "Improvements" in out
+
+    def test_compares_all_aggregate_metrics(self):
+        # Every aggregate metric on AgentWorkflowReport that has a defined
+        # direction should appear in the comparison so callers can rely on
+        # full coverage when gating eval pipelines.
+        report = _report([_clean_trace("t1")])
+        diff = compare_reports(report, report)
+        names = {m.name for m in diff.metrics}
+        expected = {
+            "task_success_rate",
+            "clean_success_rate",
+            "mean_recall",
+            "mean_precision",
+            "mean_f1",
+            "mean_tool_diversity",
+            "mean_steps",
+            "mean_search_steps",
+            "mean_step_overhead",
+            "mean_redundant_queries",
+        }
+        assert names == expected

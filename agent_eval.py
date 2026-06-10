@@ -300,3 +300,147 @@ class AgentWorkflowEvaluator:
             mean_redundant_queries=sum(r.redundant_queries for r in results) / n,
             per_task=results,
         )
+
+
+# ---------------------------------------------------------------------------
+# Report Comparison (baseline → candidate regression detection)
+# ---------------------------------------------------------------------------
+
+
+# Metric → True if higher candidate value is an improvement, False if lower is.
+# Used by compare_reports() to classify each metric delta as improvement vs
+# regression so callers can gate releases on regression-free comparisons.
+_HIGHER_IS_BETTER: dict[str, bool] = {
+    "task_success_rate": True,
+    "clean_success_rate": True,
+    "mean_recall": True,
+    "mean_precision": True,
+    "mean_f1": True,
+    "mean_tool_diversity": True,
+    "mean_steps": False,
+    "mean_search_steps": False,
+    "mean_step_overhead": False,
+    "mean_redundant_queries": False,
+}
+
+
+@dataclass
+class MetricDelta:
+    """Change in a single aggregate metric between two reports."""
+
+    name: str
+    baseline: float
+    candidate: float
+    delta: float  # candidate - baseline
+    higher_is_better: bool
+
+    @property
+    def is_improvement(self) -> bool:
+        if self.delta == 0:
+            return False
+        return (self.delta > 0) == self.higher_is_better
+
+    @property
+    def is_regression(self) -> bool:
+        if self.delta == 0:
+            return False
+        return (self.delta > 0) != self.higher_is_better
+
+
+@dataclass
+class AgentWorkflowComparison:
+    """Diff between a baseline and candidate AgentWorkflowReport.
+
+    Produced by :func:`compare_reports`. Surfaces per-metric deltas, per
+    failure-mode rate changes, and convenience accessors for improvements
+    and regressions — designed to gate eval pipelines on regression checks.
+    """
+
+    metrics: list[MetricDelta]
+    failure_mode_rate_deltas: dict[str, float]  # candidate_rate - baseline_rate
+    tolerance: float  # abs(delta) <= tolerance is treated as no-change
+
+    def _significant(self, delta: float) -> bool:
+        return abs(delta) > self.tolerance
+
+    @property
+    def improvements(self) -> list[MetricDelta]:
+        return [m for m in self.metrics if m.is_improvement and self._significant(m.delta)]
+
+    @property
+    def regressions(self) -> list[MetricDelta]:
+        return [m for m in self.metrics if m.is_regression and self._significant(m.delta)]
+
+    def has_regression(self) -> bool:
+        """True if any metric regressed beyond *tolerance*."""
+        return bool(self.regressions)
+
+    def print_summary(self) -> None:
+        lines = ["Agent Workflow Comparison", "=" * 40]
+        for m in self.metrics:
+            arrow = "→"
+            if self._significant(m.delta):
+                arrow = "↑" if m.is_improvement else "↓"
+            sign = "+" if m.delta >= 0 else ""
+            lines.append(
+                f"{m.name:22s}: {m.baseline:.3f} {arrow} {m.candidate:.3f} "
+                f"(Δ={sign}{m.delta:.3f})"
+            )
+        if self.failure_mode_rate_deltas:
+            lines.append("Failure-mode rate deltas:")
+            for mode, delta in sorted(self.failure_mode_rate_deltas.items()):
+                sign = "+" if delta >= 0 else ""
+                lines.append(f"  {mode:18s}: {sign}{delta:.3f}")
+        lines.append(
+            f"Regressions: {len(self.regressions)} | Improvements: {len(self.improvements)}"
+        )
+        print("\n".join(lines))
+
+
+def compare_reports(
+    baseline: AgentWorkflowReport,
+    candidate: AgentWorkflowReport,
+    *,
+    tolerance: float = 1e-6,
+) -> AgentWorkflowComparison:
+    """Compare two :class:`AgentWorkflowReport` instances.
+
+    Returns a :class:`AgentWorkflowComparison` capturing per-metric deltas
+    (candidate − baseline) along with failure-mode rate shifts. Deltas with
+    ``abs(delta) <= tolerance`` are treated as no-change so floating-point
+    noise does not flag false regressions.
+
+    Useful for gating agent eval runs in CI: build a baseline report from
+    the production agent, a candidate report from the proposed change, and
+    fail the pipeline if ``has_regression()`` returns True.
+    """
+    if tolerance < 0:
+        raise ValueError(f"tolerance must be non-negative, got {tolerance}")
+
+    metrics: list[MetricDelta] = []
+    for name, higher_better in _HIGHER_IS_BETTER.items():
+        b = float(getattr(baseline, name))
+        c = float(getattr(candidate, name))
+        metrics.append(
+            MetricDelta(
+                name=name,
+                baseline=b,
+                candidate=c,
+                delta=c - b,
+                higher_is_better=higher_better,
+            )
+        )
+
+    baseline_rates = baseline.failure_mode_rates()
+    candidate_rates = candidate.failure_mode_rates()
+    all_modes = set(baseline_rates) | set(candidate_rates)
+    rate_deltas = {
+        mode: candidate_rates.get(mode, 0.0) - baseline_rates.get(mode, 0.0)
+        for mode in all_modes
+    }
+
+    return AgentWorkflowComparison(
+        metrics=metrics,
+        failure_mode_rate_deltas=rate_deltas,
+        tolerance=tolerance,
+    )
