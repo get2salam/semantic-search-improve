@@ -35,6 +35,22 @@ def seeded_client(client):
 class TestHealthEndpoints:
     """Health and info endpoints."""
 
+    def test_root_landing_guides_new_users(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["name"] == "Semantic Search Engine API"
+        assert data["docs_url"] == "/docs"
+        assert data["health_url"] == "/health"
+        assert any("POST /documents" in step for step in data["quick_start"])
+        assert any("POST /search" in step for step in data["quick_start"])
+        assert data["example_request"] == {
+            "method": "POST",
+            "path": "/search",
+            "json": {"query": "artificial intelligence", "top_k": 3},
+        }
+
     def test_health_returns_200(self, client):
         resp = client.get("/health")
         assert resp.status_code == 200

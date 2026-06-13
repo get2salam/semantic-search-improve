@@ -84,6 +84,7 @@ docker run -p 8000:8000 semantic-search
 
 | Method   | Path              | Description                        |
 |----------|-------------------|------------------------------------|
+| `GET`    | `/`               | New-user landing response with docs links and example calls |
 | `GET`    | `/health`         | Health check for load balancers    |
 | `GET`    | `/stats`          | Index statistics and model info    |
 | `POST`   | `/documents`      | Add documents to the index         |
@@ -92,6 +93,16 @@ docker run -p 8000:8000 semantic-search
 | `POST`   | `/search`         | Semantic search (JSON body)        |
 | `GET`    | `/search?q=...`   | Semantic search (query params)     |
 | `POST`   | `/search/batch`   | Batch search (multiple queries)    |
+
+### API Landing
+
+Open `http://localhost:8000/` in a browser or API client to get a compact
+onboarding response with documentation links, health-check location, and the
+minimum add-documents/search calls needed to try the service.
+
+```bash
+curl http://localhost:8000/
+```
 
 ### Add Documents
 

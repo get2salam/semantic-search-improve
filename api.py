@@ -118,6 +118,18 @@ class BatchSearchResponse(BaseModel):
     elapsed_ms: float
 
 
+class ApiLandingResponse(BaseModel):
+    """Human-friendly API landing page for first-time users."""
+
+    name: str
+    version: str
+    description: str
+    docs_url: str
+    health_url: str
+    quick_start: list[str]
+    example_request: dict[str, object]
+
+
 class IndexStats(BaseModel):
     """Statistics about the current index."""
 
@@ -242,6 +254,28 @@ def _get_engine() -> SemanticSearchEngine:
 
 
 # --- Health & Info ---
+
+
+@app.get("/", response_model=ApiLandingResponse, tags=["Health"])
+async def api_landing():
+    """Return a discoverable landing response for browsers and API clients."""
+    return ApiLandingResponse(
+        name="Semantic Search Engine API",
+        version=settings.app_version,
+        description="Index documents once, then retrieve the closest matches by meaning.",
+        docs_url="/docs",
+        health_url="/health",
+        quick_start=[
+            "POST /documents with {'documents': ['first text', 'second text']}",
+            "POST /search with {'query': 'what you are looking for', 'top_k': 5}",
+            "Use GET /search?q=your+query for browser-friendly testing",
+        ],
+        example_request={
+            "method": "POST",
+            "path": "/search",
+            "json": {"query": "artificial intelligence", "top_k": 3},
+        },
+    )
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
