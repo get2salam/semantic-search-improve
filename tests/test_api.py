@@ -83,6 +83,16 @@ class TestDocumentManagement:
         resp = client.post("/documents", json={"documents": []})
         assert resp.status_code == 422  # Validation error
 
+    def test_add_blank_document_returns_validation_error_without_indexing(self, client):
+        client.delete("/documents")
+        resp = client.post("/documents", json={"documents": ["valid document", "   "]})
+
+        assert resp.status_code == 422
+        detail = str(resp.json()["detail"])
+        assert "documents" in detail
+        assert "blank text" in detail
+        assert client.get("/documents/count").json()["count"] == 0
+
     def test_document_count(self, client):
         resp = client.get("/documents/count")
         assert resp.status_code == 200
@@ -167,6 +177,17 @@ class TestRequestValidation:
         queries = [f"query_{i}" for i in range(200)]
         resp = seeded_client.post("/search/batch", json={"queries": queries, "top_k": 1})
         assert resp.status_code == 400
+
+    def test_batch_blank_query_returns_validation_error(self, seeded_client):
+        resp = seeded_client.post(
+            "/search/batch",
+            json={"queries": ["machine learning", "\t  "], "top_k": 1},
+        )
+
+        assert resp.status_code == 422
+        detail = str(resp.json()["detail"])
+        assert "queries" in detail
+        assert "blank text" in detail
 
 
 class TestMiddleware:

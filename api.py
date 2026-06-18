@@ -18,7 +18,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from config import get_settings
 from semantic_search import SemanticSearchEngine
@@ -42,6 +42,16 @@ def _configure_logging(level: str = "INFO") -> None:
 # ---------------------------------------------------------------------------
 
 
+def _reject_blank_items(values: list[str], field_name: str) -> list[str]:
+    """Reject whitespace-only strings before they reach the embedding model."""
+    blank_positions = [str(i) for i, value in enumerate(values) if not value.strip()]
+    if blank_positions:
+        raise ValueError(
+            f"{field_name} must not contain blank text at index(es): {', '.join(blank_positions)}"
+        )
+    return values
+
+
 class DocumentsRequest(BaseModel):
     """Request body for adding documents."""
 
@@ -49,6 +59,12 @@ class DocumentsRequest(BaseModel):
         ..., min_length=1, max_length=10_000, description="List of text documents to index"
     )
     batch_size: int = Field(default=64, ge=1, le=1024, description="Encoding batch size")
+
+    @field_validator("documents")
+    @classmethod
+    def documents_must_not_be_blank(cls, value: list[str]) -> list[str]:
+        """Return a 422 validation error for blank documents instead of a 500."""
+        return _reject_blank_items(value, "documents")
 
     model_config = {
         "json_schema_extra": {
@@ -86,6 +102,12 @@ class BatchSearchRequest(BaseModel):
 
     queries: list[str] = Field(..., min_length=1, description="List of search queries")
     top_k: int = Field(default=5, ge=1, description="Results per query")
+
+    @field_validator("queries")
+    @classmethod
+    def queries_must_not_be_blank(cls, value: list[str]) -> list[str]:
+        """Validate every batch query before any search work is attempted."""
+        return _reject_blank_items(value, "queries")
 
     model_config = {
         "json_schema_extra": {
