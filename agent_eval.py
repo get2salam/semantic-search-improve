@@ -383,8 +383,7 @@ class AgentWorkflowComparison:
                 arrow = "↑" if m.is_improvement else "↓"
             sign = "+" if m.delta >= 0 else ""
             lines.append(
-                f"{m.name:22s}: {m.baseline:.3f} {arrow} {m.candidate:.3f} "
-                f"(Δ={sign}{m.delta:.3f})"
+                f"{m.name:22s}: {m.baseline:.3f} {arrow} {m.candidate:.3f} (Δ={sign}{m.delta:.3f})"
             )
         if self.failure_mode_rate_deltas:
             lines.append("Failure-mode rate deltas:")
@@ -435,8 +434,7 @@ def compare_reports(
     candidate_rates = candidate.failure_mode_rates()
     all_modes = set(baseline_rates) | set(candidate_rates)
     rate_deltas = {
-        mode: candidate_rates.get(mode, 0.0) - baseline_rates.get(mode, 0.0)
-        for mode in all_modes
+        mode: candidate_rates.get(mode, 0.0) - baseline_rates.get(mode, 0.0) for mode in all_modes
     }
 
     return AgentWorkflowComparison(
