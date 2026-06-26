@@ -5,7 +5,7 @@
 [![Sentence Transformers](https://img.shields.io/badge/🤗-Sentence%20Transformers-yellow)](https://www.sbert.net/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![CI](https://github.com/get2salam/semantic-search-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/get2salam/semantic-search-engine/actions)
+[![CI](https://github.com/get2salam/semantic-search-improve/actions/workflows/ci.yml/badge.svg)](https://github.com/get2salam/semantic-search-improve/actions)
 
 A lightweight, production-ready semantic search engine powered by state-of-the-art sentence embeddings. Find similar documents based on **meaning**, not just keywords.
 
@@ -30,8 +30,8 @@ Ships with a **REST API** (FastAPI), **Docker** support, and **CI/CD** pipeline 
 ### Installation
 
 ```bash
-git clone https://github.com/get2salam/semantic-search-engine.git
-cd semantic-search-engine
+git clone https://github.com/get2salam/semantic-search-improve.git
+cd semantic-search-improve
 pip install -r requirements.txt
 ```
 
@@ -328,6 +328,9 @@ semantic-search-engine/
 ## 🧪 Running Tests
 
 ```bash
+# Same lint + test gates used by GitHub Actions
+make ci
+
 # All tests
 make test
 
@@ -337,6 +340,9 @@ make test-api
 # With verbose output
 pytest tests/ -v --tb=short
 ```
+
+`make ci` runs Ruff linting, Ruff format checks, and a pytest run with
+CI-friendly tracebacks plus `test-results.xml` output for local debugging.
 
 ## 📈 Benchmarks
 
@@ -354,7 +360,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Run `make lint` and `make test` before committing
+3. Run `make ci` before committing
 4. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
 5. Push to the branch (`git push origin feature/AmazingFeature`)
 6. Open a Pull Request

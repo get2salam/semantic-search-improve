@@ -39,9 +39,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/get2salam/semantic-search-engine"
-Repository = "https://github.com/get2salam/semantic-search-engine"
-Issues = "https://github.com/get2salam/semantic-search-engine/issues"
+Homepage = "https://github.com/get2salam/semantic-search-improve"
+Repository = "https://github.com/get2salam/semantic-search-improve"
+Issues = "https://github.com/get2salam/semantic-search-improve/issues"
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]

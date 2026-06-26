@@ -19,8 +19,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff==0.15.4
-      - run: ruff check .
-      - run: ruff format --check .
+      - run: make lint
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -55,7 +54,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short --junitxml=test-results.xml
+        run: make test-ci
 
       - name: Upload test results
         if: always()
