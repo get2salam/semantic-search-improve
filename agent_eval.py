@@ -442,3 +442,71 @@ def compare_reports(
         failure_mode_rate_deltas=rate_deltas,
         tolerance=tolerance,
     )
+
+
+# ---------------------------------------------------------------------------
+# Task-Level Regression Detection
+# ---------------------------------------------------------------------------
+
+# Ordinal severity of each failure mode, worst first. Mirrors the priority
+# order classify_failure_mode() uses when picking a task's primary mode.
+_FAILURE_MODE_SEVERITY: dict[FailureMode, int] = {
+    FailureMode.NO_RESULTS: 4,
+    FailureMode.LOW_RECALL: 3,
+    FailureMode.NOISY_RESULTS: 2,
+    FailureMode.INEFFICIENT_PATH: 1,
+    FailureMode.SUCCESS: 0,
+}
+
+
+@dataclass
+class TaskRegression:
+    """A single task whose outcome got strictly worse from baseline to candidate."""
+
+    task_id: str
+    baseline_failure_mode: FailureMode
+    candidate_failure_mode: FailureMode
+    baseline_recall: float
+    candidate_recall: float
+    recall_delta: float  # candidate - baseline
+
+
+def find_task_regressions(
+    baseline: AgentWorkflowReport,
+    candidate: AgentWorkflowReport,
+) -> list[TaskRegression]:
+    """Find individual tasks that regressed between two reports, matched by task_id.
+
+    Aggregate metrics can stay flat -- or even improve -- while specific tasks
+    silently break: e.g. one task flips from SUCCESS to NO_RESULTS while a
+    different task flips the other way, netting to zero change in
+    ``mean_recall`` or ``task_success_rate``. ``compare_reports`` only sees
+    aggregates and would report no regression at all in that scenario. This
+    function instead diffs per-task failure modes directly, so a single
+    broken task can't hide behind an unrelated task's improvement.
+
+    A task is flagged when its failure mode becomes strictly more severe,
+    using the same severity order ``classify_failure_mode`` checks in:
+    NO_RESULTS > LOW_RECALL > NOISY_RESULTS > INEFFICIENT_PATH > SUCCESS.
+
+    Tasks present in only one report (the task set changed between runs) are
+    skipped -- there is nothing to diff. Results are sorted by task_id for
+    deterministic output.
+    """
+    baseline_by_id = {r.task_id: r for r in baseline.per_task}
+    candidate_by_id = {r.task_id: r for r in candidate.per_task}
+
+    regressions = [
+        TaskRegression(
+            task_id=task_id,
+            baseline_failure_mode=b.failure_mode,
+            candidate_failure_mode=c.failure_mode,
+            baseline_recall=b.recall_at_final,
+            candidate_recall=c.recall_at_final,
+            recall_delta=c.recall_at_final - b.recall_at_final,
+        )
+        for task_id, b in baseline_by_id.items()
+        if (c := candidate_by_id.get(task_id)) is not None
+        and _FAILURE_MODE_SEVERITY[c.failure_mode] > _FAILURE_MODE_SEVERITY[b.failure_mode]
+    ]
+    return sorted(regressions, key=lambda r: r.task_id)

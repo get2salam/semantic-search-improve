@@ -9,6 +9,7 @@ from agent_eval import (
     FailureMode,
     classify_failure_mode,
     compare_reports,
+    find_task_regressions,
 )
 
 
@@ -886,3 +887,72 @@ class TestCompareReports:
             "mean_redundant_queries",
         }
         assert names == expected
+
+
+# ---------------------------------------------------------------------------
+# Task-level regression detection
+# ---------------------------------------------------------------------------
+
+
+class TestFindTaskRegressions:
+    def test_identical_reports_have_no_regressions(self):
+        report = _report([_clean_trace("t1"), _clean_trace("t2")])
+        assert find_task_regressions(report, report) == []
+
+    def test_detects_single_task_regression(self):
+        baseline = _report([_clean_trace("a")])
+        candidate = _report([_no_results_trace("a")])
+        regressions = find_task_regressions(baseline, candidate)
+        assert len(regressions) == 1
+        reg = regressions[0]
+        assert reg.task_id == "a"
+        assert reg.baseline_failure_mode == FailureMode.SUCCESS
+        assert reg.candidate_failure_mode == FailureMode.NO_RESULTS
+        assert reg.baseline_recall == pytest.approx(1.0)
+        assert reg.candidate_recall == pytest.approx(0.0)
+        assert reg.recall_delta == pytest.approx(-1.0)
+
+    def test_improvement_is_not_flagged(self):
+        baseline = _report([_no_results_trace("a")])
+        candidate = _report([_clean_trace("a")])
+        assert find_task_regressions(baseline, candidate) == []
+
+    def test_regression_hidden_by_flat_aggregate_is_still_caught(self):
+        # baseline: task "a" fails, task "b" succeeds -> success_rate 0.5
+        # candidate: task "a" succeeds, task "b" fails -> success_rate 0.5
+        # The aggregate is unchanged, but task "b" is a genuine regression
+        # that compare_reports() alone would never surface.
+        baseline = _report([_no_results_trace("a"), _clean_trace("b")])
+        candidate = _report([_clean_trace("a"), _no_results_trace("b")])
+
+        aggregate_diff = compare_reports(baseline, candidate)
+        assert aggregate_diff.regressions == []
+
+        regressions = find_task_regressions(baseline, candidate)
+        assert [r.task_id for r in regressions] == ["b"]
+        assert regressions[0].baseline_failure_mode == FailureMode.SUCCESS
+        assert regressions[0].candidate_failure_mode == FailureMode.NO_RESULTS
+
+    def test_tasks_missing_from_either_report_are_skipped(self):
+        baseline = _report([_clean_trace("a"), _clean_trace("shared")])
+        candidate = _report([_no_results_trace("shared"), _no_results_trace("c")])
+        regressions = find_task_regressions(baseline, candidate)
+        assert [r.task_id for r in regressions] == ["shared"]
+
+    def test_results_sorted_by_task_id(self):
+        baseline = _report([_clean_trace("z"), _clean_trace("a"), _clean_trace("m")])
+        candidate = _report(
+            [_no_results_trace("z"), _no_results_trace("a"), _no_results_trace("m")]
+        )
+        regressions = find_task_regressions(baseline, candidate)
+        assert [r.task_id for r in regressions] == ["a", "m", "z"]
+
+    def test_noisy_to_no_results_is_a_regression(self):
+        # Both are "success"-adjacent-or-failed but NO_RESULTS is strictly
+        # more severe than NOISY_RESULTS in the shared severity ordering.
+        baseline = _report([_noisy_trace("a")])
+        candidate = _report([_no_results_trace("a")])
+        regressions = find_task_regressions(baseline, candidate)
+        assert len(regressions) == 1
+        assert regressions[0].baseline_failure_mode == FailureMode.NOISY_RESULTS
+        assert regressions[0].candidate_failure_mode == FailureMode.NO_RESULTS
