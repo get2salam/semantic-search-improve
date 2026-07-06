@@ -15,6 +15,7 @@ Ships with a **REST API** (FastAPI), **Docker** support, and **CI/CD** pipeline 
 
 - 🔎 **Fast & Efficient** — FAISS-powered vector similarity search
 - 🤖 **State-of-the-Art Embeddings** — Uses `all-MiniLM-L6-v2` (384-dim, blazing fast)
+- 🔀 **Hybrid Retrieval** — BM25 keyword search fused with dense embeddings via Reciprocal Rank Fusion (RRF)
 - 🌐 **REST API** — Production-grade FastAPI with OpenAPI docs, validation, CORS
 - 🎯 **Fine-Tuning Pipeline** — Domain-adaptive training with contrastive/triplet loss and k-fold CV
 - 📊 **Retrieval Evaluation** — MRR, MAP, NDCG@k, Precision@k, Recall@k with multi-model benchmarking
@@ -239,6 +240,43 @@ result.print_comparison()
   all-MiniLM-L6-v2            0.8500   0.8100   0.8400   0.8900
 ```
 
+## 🔀 Hybrid Search (BM25 + Dense Fusion)
+
+Keyword search (BM25) and dense embeddings each miss things the other
+catches — BM25 misses synonyms/paraphrases, dense embeddings miss exact
+identifiers and rare terms. `HybridSearchEngine` runs both retrievers and
+fuses their ranked lists with **Reciprocal Rank Fusion (RRF)**, which
+rewards documents that rank well across *both* signals over a document
+that only one signal loves:
+
+```python
+from hybrid_search import HybridSearchEngine
+
+engine = HybridSearchEngine()
+engine.index([
+    "deep learning uses neural networks for feature extraction",
+    "python is a versatile programming language",
+    "gradient descent optimises neural network weights",
+])
+
+for r in engine.search("neural network training", top_k=3):
+    print(f"[{r.rrf_score:.4f}] bm25_rank={r.bm25_rank} dense_rank={r.dense_rank}  {r.document}")
+```
+
+**Try the fusion mechanics without any ML dependencies:**
+
+```bash
+python -m examples.hybrid_search_demo
+```
+
+This runnable example indexes a tiny corpus with `BM25Retriever` and fuses
+it against a hand-authored dense ranking using the same
+`reciprocal_rank_fusion()` utility `HybridSearchEngine` relies on
+internally — it imports nothing beyond `hybrid_search`, so it runs
+instantly and works fully offline (no sentence-transformers model
+download). [`tests/test_hybrid_search_demo.py`](tests/test_hybrid_search_demo.py)
+guards its output so the walkthrough can't silently drift from the code.
+
 ## 🧪 Experiment Tracking
 
 Track training runs, compare models, and manage model versions — all locally with zero external dependencies:
@@ -302,11 +340,14 @@ python experiment_tracker.py export --output results.json
 semantic-search-engine/
 ├── api.py                    # FastAPI REST application
 ├── semantic_search.py        # Core search engine class
+├── hybrid_search.py          # BM25 + dense retrieval fused via RRF
 ├── training.py               # Fine-tuning pipeline (contrastive/triplet/CV)
 ├── evaluation.py             # Retrieval metrics & multi-model benchmarking
 ├── experiment_tracker.py     # MLOps experiment tracking & model registry
 ├── config.py                 # Pydantic-settings configuration
 ├── demo.py                   # Interactive CLI demo
+├── examples/
+│   └── hybrid_search_demo.py # Runnable, offline RRF fusion walkthrough
 ├── requirements.txt          # Python dependencies
 ├── pyproject.toml            # Project metadata & tool config
 ├── Makefile                  # Dev shortcuts
@@ -320,6 +361,8 @@ semantic-search-engine/
 │   ├── test_search.py        # Core engine unit tests
 │   ├── test_api.py           # API integration tests
 │   ├── test_training.py      # Training & evaluation tests
+│   ├── test_hybrid_search.py       # BM25/dense/RRF fusion tests
+│   ├── test_hybrid_search_demo.py  # Guard test for the examples/ walkthrough
 │   └── test_experiment_tracker.py  # Experiment tracking tests (46 tests)
 ├── LICENSE
 └── README.md
